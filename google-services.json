@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "676060632954",
+    "project_id": "deliveryapp-90161",
+    "storage_bucket": "deliveryapp-90161.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:676060632954:android:29ae749873fb5a94d9e8c3",
+        "android_client_info": {
+          "package_name": "com.bestl.deliveryapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBSMrRCimh2RoDDzz5imvnnKvH6cE2YOMc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
