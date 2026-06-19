@@ -4,6 +4,7 @@
     "slug": "final-app",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "finalapp",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -37,6 +38,15 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#208AEF",
+          "sounds": [
+            "./assets/notification.mp3"
+          ]
+        }
+      ],
       "expo-audio",
       [
         "expo-location",
@@ -50,7 +60,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "e45fffa3-9d3e-4c4f-b52b-099b1d869494"
+        "projectId": "6a36e0c8-c8d8-466f-809d-c022ec036fa4"
       }
     }
   }

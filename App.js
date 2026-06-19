@@ -1,21 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, View, ActivityIndicator } from 'react-native';
+import { Alert, View, ActivityIndicator, AppState } from 'react-native';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
-
-// Εισαγωγή του Background Task για να αρχικοποιηθεί
-import './src/services/backgroundTasks'; 
 
 // Εισαγωγή των Οθονών
 import LoginScreen from './src/screens/LoginScreen';
-import StoreDashboard from './src/screens/StoreDashboard';
 import DriverDashboard from './src/screens/DriverDashboard';
+
+// ─── Ρύθμιση notification handler (για foreground notifications) ──────────────
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  const [userRole, setUserRole] = useState(null);
-  const [locationSubscription, setLocationSubscription] = useState(null);
   const [isInitializing, setIsInitializing] = useState(true);
 
   // --- AUTH SESSION MANAGEMENT (AUTO-LOGIN) ---
@@ -23,30 +29,19 @@ export default function App() {
     async function restoreSession() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session && session.user && session.user.id) {
-        // Ψάχνουμε αν είναι διανομέας
         const { data: driver } = await supabase.from('drivers').select('*').eq('id', session.user.id).single();
         if (driver) {
-          setUserRole('driver');
           setCurrentUser(driver);
-        } else {
-          // Αν δεν είναι, ψάχνουμε αν είναι κατάστημα
-          const { data: store } = await supabase.from('stores').select('*').eq('id', session.user.id).single();
-          if (store) {
-            setUserRole('store');
-            setCurrentUser(store);
-          }
         }
       }
-      setIsInitializing(false); // Τέλος φόρτωσης
+      setIsInitializing(false);
     }
 
     restoreSession();
 
-    // Ακούμε για τυχόν αλλαγές (π.χ. αν πατήσει Έξοδος)
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
-        setUserRole(null);
       }
     });
 
@@ -55,53 +50,85 @@ export default function App() {
     };
   }, []);
 
+  // --- LOCATION + BACKGROUND SERVICE SETUP ---
   useEffect(() => {
-    async function setupLocation() {
-      if (userRole === 'driver' && currentUser) {
-        
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Προσοχή', 'Η τοποθεσία είναι απαραίτητη.');
-          return;
-        }
-
-        const sub = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.BestForNavigation,
-            timeInterval: 5000,
-            distanceInterval: 5,
-          },
-          async (location) => {
-            console.log("📍 Στίγμα στάλθηκε:", location.coords.latitude, location.coords.longitude);
-            await supabase
-              .from('drivers')
-              .update({ 
-                latitude: location.coords.latitude, 
-                longitude: location.coords.longitude 
-              })
-              .eq('id', currentUser.id);
+    async function setupLocationServices() {
+      if (!currentUser) {
+        // Logout: σταματάμε το background location task
+        try {
+          const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+          if (hasStarted) {
+            await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
           }
-        );
-        
-        setLocationSubscription(sub);
-      } else {
-        if (locationSubscription) {
-          locationSubscription.remove();
-          setLocationSubscription(null);
+        } catch (_) {}
+        await AsyncStorage.removeItem('driverId');
+        await AsyncStorage.removeItem('knownPendingOrderIds');
+        return;
+      }
+
+      // Login: αποθηκεύουμε το driverId για τα background tasks
+      await AsyncStorage.setItem('driverId', currentUser.id);
+
+      // Ζητάμε άδεια foreground location
+      const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+      if (fgStatus !== 'granted') {
+        Alert.alert('Προσοχή', 'Η τοποθεσία είναι απαραίτητη για τη λειτουργία της εφαρμογής.');
+        return;
+      }
+
+      // Ζητάμε άδεια background location με try/catch (μην κρασάρει αν αρνηθεί)
+      try {
+        const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+        if (bgStatus !== 'granted') {
+          console.log('Background permission not granted');
         }
+      } catch (e) {
+        console.log('Error requesting background location:', e);
+      }
+
+      // Συνάρτηση για εκκίνηση του service
+      const startService = async () => {
+        try {
+          const hasStarted = await Location.hasStartedLocationUpdatesAsync('background-location-task');
+          if (!hasStarted) {
+            await Location.startLocationUpdatesAsync('background-location-task', {
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: 10000,          // Αυστηρά κάθε 10 δευτερόλεπτα
+              distanceInterval: 0,          // 0 ώστε να χτυπάει ακόμα κι αν το κινητό είναι εντελώς ακίνητο
+              foregroundService: {
+                notificationTitle: 'VERTEX - Σε βάρδια',
+                notificationBody: 'Η εφαρμογή παρακολουθεί παραγγελίες...',
+                notificationColor: '#208AEF',
+                killServiceOnDestroy: false,
+              },
+              pausesUpdatesAutomatically: false,
+              showsBackgroundLocationIndicator: true,
+            });
+            console.log('✅ Background Location Service ξεκίνησε');
+          }
+        } catch (e) {
+          Alert.alert('Σφάλμα Foreground Service', String(e));
+          console.error('Σφάλμα εκκίνησης background location:', e);
+        }
+      };
+
+      // Ελέγχουμε αν η εφαρμογή είναι ενεργή ΠΡΙΝ ξεκινήσουμε το service
+      // Αν ο χρήστης γύρισε από τις ρυθμίσεις τοποθεσίας, ίσως η εφαρμογή να είναι ακόμα στο background για λίγα ms.
+      if (AppState.currentState === 'active') {
+        await startService();
+      } else {
+        const subscription = AppState.addEventListener('change', async (nextAppState) => {
+          if (nextAppState === 'active') {
+            subscription.remove();
+            await startService();
+          }
+        });
       }
     }
 
-    setupLocation();
+    setupLocationServices();
+  }, [currentUser]);
 
-    return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
-      }
-    };
-  }, [currentUser, userRole]);
-
-  // Δείχνουμε ένα loading όσο ελέγχει αν ο χρήστης είναι ήδη συνδεδεμένος
   if (isInitializing) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -110,37 +137,22 @@ export default function App() {
     );
   }
 
-  // --- ROUTER (Επιλογή Οθόνης) ---
   if (!currentUser) {
     return (
-      <LoginScreen 
-        setCurrentUser={setCurrentUser} 
-        setUserRole={setUserRole} 
-        isDarkMode={isDarkMode} 
-        setIsDarkMode={setIsDarkMode} 
+      <LoginScreen
+        setCurrentUser={setCurrentUser}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
       />
     );
   }
 
-  if (userRole === 'store') {
-    return (
-      <StoreDashboard 
-        currentUser={currentUser} 
-        setCurrentUser={setCurrentUser} 
-        isDarkMode={isDarkMode} 
-        setIsDarkMode={setIsDarkMode} 
-      />
-    );
-  }
-
-  if (userRole === 'driver') {
-    return (
-      <DriverDashboard 
-        currentUser={currentUser} 
-        setCurrentUser={setCurrentUser} 
-        isDarkMode={isDarkMode} 
-        setIsDarkMode={setIsDarkMode} 
-      />
-    );
-  }
+  return (
+    <DriverDashboard
+      currentUser={currentUser}
+      setCurrentUser={setCurrentUser}
+      isDarkMode={isDarkMode}
+      setIsDarkMode={setIsDarkMode}
+    />
+  );
 }

@@ -4,19 +4,12 @@ import { useAudioPlayer } from 'expo-audio';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants'; 
+import Constants from 'expo-constants';
 import { supabase } from '../../supabase';
 import { getStyles } from '../styles/globalStyles';
 
 const notificationSound = require('../../assets/notification.mp3');
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
 
 async function registerForPushNotificationsAsync() {
   let token;
@@ -24,8 +17,10 @@ async function registerForPushNotificationsAsync() {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'default',
       importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
+      vibrationPattern: [0, 500, 200, 500],
+      lightColor: '#208AEF',
+      sound: 'default',           // Ήχος συστήματος για background notifications
+      enableVibrate: true,
     });
   }
   if (Device.isDevice) {
@@ -75,6 +70,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState({ title: '', message: '', onConfirm: null });
 
+  // State για μηνύματα από το Κέντρο Ελέγχου
+  const [systemAlert, setSystemAlert] = useState(null);
+
   useEffect(() => {
     fetchOrders();
 
@@ -85,22 +83,30 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           await supabase.from('drivers').update({ expo_push_token: token }).eq('id', currentUser.id);
         }
       } catch (e) {
-        console.log("Σφάλμα στο push setup:", e);
+        console.log('Σφάλμα στο push setup:', e);
       }
     }
 
     const tokenTimer = setTimeout(setupPushNotifications, 1500);
 
+    // Listeners για ανανέωση δεδομένων μέσω Push Notifications
+    const notificationListener = Notifications.addNotificationReceivedListener(notification => {
+      fetchOrders(); // Όταν η εφαρμογή είναι ανοιχτή αλλά χάθηκε το WebSocket connection
+    });
+
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+      fetchOrders(); // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background
+    });
+
     const channel = supabase
-      .channel(`public:orders:${currentUser.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
-        if (payload.new.status === 'pending') {
-          triggerNotification();
-          fetchOrders();
-        }
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
+      .channel(`driver_orders_${currentUser.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        // Σε κάθε αλλαγή (INSERT, UPDATE, DELETE) φέρνουμε ξανά τα δεδομένα (ανανέωση UI)
         fetchOrders();
+        // Ηχητική ειδοποίηση και δόνηση ΜΟΝΟ σε νέα παραγγελία (INSERT)
+        if (payload.eventType === 'INSERT' && payload.new?.status === 'pending') {
+          triggerNotification();
+        }
       })
       .subscribe();
 
@@ -108,18 +114,35 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       if (nextAppState === 'active') fetchOrders(); 
     });
 
+    // ─── ΛΗΨΗ ΜΗΝΥΜΑΤΩΝ ΑΠΟ ΚΕΝΤΡΟ ΕΛΕΓΧΟΥ (BROADCAST) ───
+    const systemAlertChannel = supabase
+      .channel('system_alerts')
+      .on('broadcast', { event: 'admin_message' }, (payload) => {
+        const data = payload.payload;
+        if (!data) return;
+        if (data.target_type === 'driver' && (data.target_id === 'all' || data.target_id === currentUser.id)) {
+          setSystemAlert(data.message);
+          triggerNotification();
+        }
+      })
+      .subscribe();
+
     return () => { 
       clearTimeout(tokenTimer);
+      if (notificationListener) notificationListener.remove();
+      if (responseListener) responseListener.remove();
       supabase.removeChannel(channel); 
+      supabase.removeChannel(systemAlertChannel);
       appStateSubscription.remove();
     };
-  }, [player]); // Προσθέτουμε το player στα dependencies
+  }, []); // Αφαιρέσαμε το player από εδώ για να μην κλείνει η σύνδεση!
 
   // Η συνάρτηση πλέον απλά πατάει το "Play"
   async function triggerNotification() {
     Vibration.vibrate([0, 500, 200, 500]);
     try {
       if (player) {
+        player.seekTo(0); // Επαναφορά του ήχου στην αρχή
         player.play();
       }
     } catch (e) { 
@@ -271,48 +294,50 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     return (
       <View style={styles.orderCard}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1.5, borderBottomColor: isDarkMode ? '#333' : '#F0F0F0', paddingBottom: 10 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB', paddingBottom: 12 }}>
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={{ fontWeight: 'bold', fontSize: 18, color: isDarkMode ? '#FFF' : '#2c3e50', flexShrink: 1 }} numberOfLines={1}>
+            <Text style={{ fontWeight: '900', fontSize: 18, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
               🏢 {item.store_name}
             </Text>
             {item.store_phone ? (
-              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 4 }}>
-                <Text style={{ fontSize: 18 }}>📞</Text>
+              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
+                <Text style={{ fontSize: 16 }}>📞</Text>
               </TouchableOpacity>
             ) : null}
           </View>
-          <View style={{ backgroundColor: timeBgColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, height: 30, justifyContent: 'center', marginLeft: 8 }}>
-            <Text style={{color: timeColor, fontWeight:'900', fontSize: 14}}>
+          <View style={{ backgroundColor: timeBgColor, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, justifyContent: 'center', marginLeft: 8 }}>
+            <Text style={{color: timeColor, fontWeight:'900', fontSize: 13}}>
               {isCompleted ? `⏱️ ${totalMins} λ.` : `${mins} λ.`}
             </Text>
           </View>
         </View>
 
-        <Text style={styles.orderAddress}>{item.address}</Text>
+        <Text style={[styles.orderAddress, { color: isDarkMode ? '#EAD7B1' : '#1F2937', fontSize: 17, marginBottom: 12 }]}>{item.address}</Text>
         
         {item.payment_method ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-          <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, justifyContent: 'center', alignItems: 'center' }}>
-            <Text style={{fontWeight: '900', color: '#FFF', fontSize: 13, textAlign: 'center'}}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: item.comments ? 12 : 4 }}>
+            <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: {width: 0, height: 2} }}>
+              <Text style={{fontWeight: '900', color: '#FFF', fontSize: 12, textAlign: 'center', letterSpacing: 1}}>
                 {item.payment_method === 'cash' ? '💵 ΜΕΤΡΗΤΑ' : '💳 ΚΑΡΤΑ'}
               </Text>
             </View>
           </View>
         ) : null}
         
-        {item.comments ? <Text style={styles.commentText}>💬 {item.comments}</Text> : null}
+        {item.comments ? <Text style={[styles.commentText, { fontSize: 14, padding: 8, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', color: isDarkMode ? '#A0A0A0' : '#4B5563' }]}>💬 {item.comments}</Text> : null}
         
         {item.status === 'pending' && (
-          <TouchableOpacity style={styles.acceptButton} onPress={() => acceptOrder(item.id)}>
-            <Text style={styles.buttonTextWhite}>Αποδοχή</Text>
+          <TouchableOpacity style={[styles.premiumButtonWrapper, { shadowColor: '#C5A066' }]} onPress={() => acceptOrder(item.id)}>
+            <View style={[styles.premiumButtonBackground, { backgroundColor: '#C5A066' }]}>
+              <Text style={[styles.premiumButtonText, { color: '#121212' }]}>ΑΠΟΔΟΧΗ</Text>
+            </View>
           </TouchableOpacity>
         )}
         
         {item.status === 'accepted' && (
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 15, gap: 10 }}>
             <TouchableOpacity 
-              style={[styles.acceptButton, { flex: 1, marginRight: 8, marginTop: 0, backgroundColor: isDarkMode ? '#4B5563' : '#1F2937' }]} 
+              style={[styles.premiumButtonWrapper, { flex: 1, marginTop: 0, shadowColor: isDarkMode ? '#000' : '#CCC' }]} 
               onPress={() => {
                 const fullDestination = `${item.address}, Φλώρινα, Ελλάδα`;
                 Linking.openURL(Platform.select({
@@ -321,20 +346,24 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 }));
               }}
             >
-              <Text style={styles.buttonTextWhite}>📍 Πλοήγηση</Text>
+              <View style={[styles.premiumButtonBackground, { backgroundColor: isDarkMode ? '#333333' : '#E5E7EB' }]}>
+                <Text style={[styles.premiumButtonText, { color: isDarkMode ? '#EAD7B1' : '#374151' }]}>📍 ΠΛΟΗΓΗΣΗ</Text>
+              </View>
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.completeButton, { flex: 1, marginLeft: 8, marginTop: 0 }]} 
+              style={[styles.premiumButtonWrapper, { flex: 1, marginTop: 0, shadowColor: '#10B981' }]} 
               onPress={() => completeOrder(item.id)}
             >
-              <Text style={styles.buttonTextWhite}>✔️ Παραδόθηκε</Text>
+              <View style={[styles.premiumButtonBackground, { backgroundColor: '#10B981' }]}>
+                <Text style={[styles.premiumButtonText, { color: '#FFF' }]}>✔️ ΠΑΡΑΔΟΣΗ</Text>
+              </View>
             </TouchableOpacity>
           </View>
         )}
 
         {isCompleted && (
-          <Text style={{ color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: isDarkMode ? '#374151' : '#E5E7EB', paddingTop: 10 }}>
+          <Text style={{ color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: isDarkMode ? '#333' : '#E5E7EB', paddingTop: 10 }}>
             ⏱️ Συνολικά: {totalMins} λ. (Αναμονή: {pendingMins} λ. | Διανομή: {deliveryMins} λ.)
           </Text>
         )}
@@ -372,31 +401,38 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { borderBottomWidth: 4, borderBottomColor: '#208AEF' }]}>
+      <View style={[styles.header, { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: isDarkMode ? '#1A1A1A' : '#FFFFFF', zIndex: 10 }]}>
         <View style={{ flex: 1, alignItems: 'flex-start' }}>
-          <Text style={styles.driverName} numberOfLines={1}>🛵 {currentUser.full_name}</Text>
+          <Text style={{ fontSize: 10, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1 }}>VERTEX DRIVER</Text>
+          <Text style={[styles.driverName, { color: isDarkMode ? '#EAD7B1' : '#121212', fontSize: 18 }]} numberOfLines={1}>{currentUser.full_name}</Text>
         </View>
         
         <View style={{ flex: 1, alignItems: 'center' }}>
           <TouchableOpacity onPress={() => setIsDarkMode(!isDarkMode)}>
-            <Text style={{ fontSize: 24 }}>{isDarkMode ? '☀️' : '🌙'}</Text>
+            <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, borderRadius: 20 }}>
+              <Text style={{ fontSize: 18 }}>{isDarkMode ? '☀️' : '🌙'}</Text>
+            </View>
           </TouchableOpacity>
         </View>
 
         <View style={{ flex: 1, alignItems: 'flex-end' }}>
           <TouchableOpacity onPress={() => setMenuVisible(true)}>
-            <Text style={{ fontSize: 32, color: isDarkMode ? '#FFF' : '#000', fontWeight: 'bold' }}>☰</Text>
+            <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20 }}>
+              <Text style={{ fontSize: 16, color: isDarkMode ? '#FFF' : '#000', fontWeight: 'bold' }}>☰</Text>
+            </View>
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={styles.tabContainer}>
-        <TouchableOpacity style={styles.tab} onPress={() => setActiveTab('pending')}>
-          <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>Ενεργές ({pendingOrders.length})</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.tab} onPress={() => setActiveTab('my_orders')}>
-          <Text style={[styles.tabText, activeTab === 'my_orders' && styles.activeTabText]}>Αποδεκτές ({myOrders.length})</Text>
-        </TouchableOpacity>
+      <View style={[styles.tabContainer, { backgroundColor: isDarkMode ? '#121212' : '#F8F9FA', padding: 12, borderBottomWidth: 0 }]}>
+        <View style={{ flexDirection: 'row', backgroundColor: isDarkMode ? '#1A1A1A' : '#E9ECEF', borderRadius: 16, padding: 4, flex: 1, borderWidth: 1, borderColor: isDarkMode ? '#333' : '#DEE2E6' }}>
+          <TouchableOpacity style={[styles.tab, activeTab === 'pending' && (isDarkMode ? styles.tabActiveDarkDriver : styles.tabActiveLightDriver)]} onPress={() => setActiveTab('pending')}>
+            <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, activeTab === 'pending' && styles.tabTextActiveDriver]}>ΕΝΕΡΓΕΣ ({pendingOrders.length})</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tab, activeTab === 'my_orders' && (isDarkMode ? styles.tabActiveDarkDriver : styles.tabActiveLightDriver)]} onPress={() => setActiveTab('my_orders')}>
+            <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, activeTab === 'my_orders' && styles.tabTextActiveDriver]}>ΑΠΟΔΕΚΤΕΣ ({myOrders.length})</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList 
@@ -503,6 +539,46 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 <Text style={styles.alertModalButtonConfirmText}>Ναι</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── MODAL ΕΙΔΟΠΟΙΗΣΗΣ ΚΕΝΤΡΟΥ ΕΛΕΓΧΟΥ ─── */}
+      <Modal visible={!!systemAlert} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 400,
+            backgroundColor: isDarkMode ? '#1C1C1C' : '#FFFFFF',
+            borderRadius: 24,
+            padding: 24,
+            borderTopWidth: 4,
+            borderTopColor: '#C5A066',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.3,
+            shadowRadius: 20,
+            elevation: 10
+          }}>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', marginBottom: 16 }}>
+              📢 Νέο Μήνυμα από Κέντρο
+            </Text>
+            <View style={{ backgroundColor: isDarkMode ? '#2A2520' : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+              <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14', lineHeight: 24 }}>
+                {systemAlert}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#C5A066',
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: 'center'
+              }}
+              onPress={() => setSystemAlert(null)}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

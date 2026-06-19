@@ -2,26 +2,26 @@ import { StyleSheet } from 'react-native';
 
 export const Colors = {
   light: {
-    background: '#E3F2FD', // Ένα πολύ απαλό και ξεκούραστο γαλάζιο
+    background: '#F8F9FA', // Πιο premium off-white (αντί για γαλάζιο)
     card: '#FFFFFF',
-    text: '#000000',
-    subtitle: '#555555',
-    border: '#DDDDDD',
-    inputBg: '#F9F9F9',
-    toggleBg: '#E0E0E0',
-    commentBg: '#f5f5f5',
-    acceptedBg: '#F0F8FF'
+    text: '#121212',
+    subtitle: '#6B7280',
+    border: '#E5E7EB',
+    inputBg: '#F3F4F6',
+    toggleBg: '#E5E7EB',
+    commentBg: '#F3F4F6',
+    acceptedBg: '#F0FDF4'
   },
   dark: {
-    background: '#0F172A', // Ένα πολύ βαθύ, σκούρο μπλε/γκρι αντί για σκέτο μαύρο
-    card: '#1E1E1E',
-    text: '#FFFFFF',
-    subtitle: '#AAAAAA',
-    border: '#333333',
-    inputBg: '#2C2C2C',
-    toggleBg: '#333333',
-    commentBg: '#222222',
-    acceptedBg: '#1a2b3c'
+    background: '#0D0D0D', // Vertex Premium Charcoal
+    card: 'rgba(20, 20, 20, 0.9)', // Vertex Glass Card
+    text: '#EAD7B1', // Premium Light Gold
+    subtitle: '#A0A0A0', // Muted Gray
+    border: '#C5A066', // Vertex Brass/Gold Accent
+    inputBg: '#151515',
+    toggleBg: '#151515',
+    commentBg: '#1A1A1A',
+    acceptedBg: 'rgba(6, 78, 59, 0.3)'
   }
 };
 
@@ -57,19 +57,25 @@ export const getStyles = (isDark) => {
     submitBtn: { backgroundColor: '#E53935', padding: 12, borderRadius: 5, alignItems: 'center' },
     
     orderCard: { 
-      backgroundColor: isDark ? '#2C2C2C' : '#FFFFFF', 
-      padding: 18, 
-      marginHorizontal: 15, 
-      marginVertical: 12, 
-      borderRadius: 16, 
-      elevation: 6, // Σκιά για Android
-      shadowColor: '#000', // Σκιά για iOS
-      shadowOffset: { width: 0, height: 4 }, 
-      shadowOpacity: 0.12, 
-      shadowRadius: 8,
-      borderWidth: 1.5,
-      borderColor: isDark ? '#444444' : '#E2E8F0'
+      backgroundColor: isDark ? 'rgba(20, 20, 20, 0.9)' : theme.card, 
+      padding: 20, 
+      marginHorizontal: 16, 
+      marginVertical: 10, 
+      borderRadius: 22, 
+      elevation: 8,
+      shadowColor: isDark ? '#C5A066' : '#000', 
+      shadowOffset: { width: 0, height: 6 }, 
+      shadowOpacity: 0.25, 
+      shadowRadius: 10,
+      borderWidth: 1,
+      borderColor: isDark ? '#C5A066' : theme.border
     },
+    tabActiveDarkDriver: { backgroundColor: '#1A1A1A', borderRadius: 12, borderWidth: 1, borderColor: '#208AEF', shadowColor: '#208AEF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 2 },
+    tabActiveLightDriver: { backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#208AEF', shadowColor: '#208AEF', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 2 },
+    tabTextActiveDriver: { color: '#208AEF', fontWeight: '900', letterSpacing: 1 },
+    premiumButtonWrapper: { marginTop: 12, borderRadius: 12, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
+    premiumButtonBackground: { height: 50, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    premiumButtonText: { fontSize: 14, fontWeight: '900', letterSpacing: 1.5, textTransform: 'uppercase' },
     orderAddress: { fontSize: 16, fontWeight: 'bold', marginBottom: 5, color: theme.text },
     commentText: { fontStyle: 'italic', color: theme.subtitle, marginTop: 5, backgroundColor: theme.commentBg, padding: 5, borderRadius: 5 },
     
@@ -123,5 +129,70 @@ export const getStyles = (isDark) => {
     alertModalButtonCancelText: { color: theme.text, fontWeight: 'bold', fontSize: 16 },
     alertModalButtonConfirm: { flex: 1, paddingVertical: 12, backgroundColor: '#208AEF', borderRadius: 8, alignItems: 'center' },
     alertModalButtonConfirmText: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
+
+    // Extracted Store Dashboard Premium Styles
+    headerPremium: { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: isDark ? '#0D0D0D' : '#FFFFFF', zIndex: 10 },
+    headerLeft: { flex: 1, alignItems: 'flex-start' },
+    headerBrandStore: { fontSize: 10, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1 },
+    headerNameStore: { color: isDark ? '#EAD7B1' : '#121212', fontSize: 18, fontWeight: 'bold' },
+    headerCenter: { flex: 1, alignItems: 'center' },
+    headerIconBg: { backgroundColor: isDark ? '#151515' : '#F0F0F0', padding: 8, borderRadius: 20, borderWidth: isDark ? 1 : 0, borderColor: '#C5A066' },
+    headerIcon: { fontSize: 18 },
+    headerRight: { flex: 1, alignItems: 'flex-end' },
+    headerMenuBg: { backgroundColor: isDark ? '#151515' : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20, borderWidth: isDark ? 1 : 0, borderColor: '#C5A066' },
+    headerMenuIcon: { fontSize: 16, color: isDark ? '#EAD7B1' : '#000', fontWeight: 'bold' },
+    formCardPremium: { backgroundColor: isDark ? 'rgba(20, 20, 20, 0.9)' : theme.card, borderRadius: 22, elevation: 6, shadowColor: isDark ? '#C5A066' : '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.15, shadowRadius: 8, padding: 20, marginHorizontal: 16, marginTop: 16, borderWidth: isDark ? 1 : 0, borderColor: isDark ? '#C5A066' : 'transparent' },
+    formGroupTop: { zIndex: 999, flex: 0, width: '100%' },
+    placesContainer: { flex: 0, marginBottom: 12, zIndex: 999 },
+    placesInput: { backgroundColor: theme.inputBg, borderWidth: 1, borderColor: isDark ? '#C5A066' : theme.border, color: theme.text, height: 50, borderRadius: 12, fontSize: 15, padding: 10 },
+    placesListView: { position: 'absolute', top: 55, left: 0, right: 0, backgroundColor: isDark ? '#151515' : 'white', borderRadius: 12, elevation: 10, zIndex: 1000 },
+    inputSmallPremium: { backgroundColor: theme.inputBg, borderWidth: 1, borderColor: isDark ? '#C5A066' : theme.border, color: theme.text, height: 50, borderRadius: 12, fontSize: 15, marginBottom: 12, padding: 10 },
+    paymentTogglePremium: { flexDirection: 'row', marginBottom: 12, gap: 10 },
+    payBtnPremium: { flex: 1, padding: 10, borderWidth: 1, borderColor: isDark ? '#C5A066' : theme.border, borderRadius: 12, height: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#151515' : theme.inputBg },
+    payBtnTextPremium: { color: theme.subtitle, fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
+    commentInputPremium: { backgroundColor: theme.inputBg, borderWidth: 1, borderColor: isDark ? '#C5A066' : theme.border, color: theme.text, height: 60, borderRadius: 12, textAlignVertical: 'top', fontSize: 15, marginBottom: 12, padding: 10 },
+    submitBtnWrapper: { marginTop: 4, borderRadius: 12, shadowColor: isDark ? '#C5A066' : '#8E44AD', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
+    submitBtnBg: { backgroundColor: isDark ? '#C5A066' : '#8E44AD', height: 50, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    submitBtnText: { color: isDark ? '#0D0D0D' : '#FFF', fontSize: 14, fontWeight: '900', letterSpacing: 1.5, textTransform: 'uppercase' },
+    activeOrdersSection: { paddingHorizontal: 20, paddingVertical: 14, backgroundColor: isDark ? '#0D0D0D' : '#F8F9FA', alignItems: 'center', borderTopWidth: 1, borderTopColor: isDark ? '#333' : '#E5E7EB' },
+    activeOrdersTitle: { fontSize: 14, fontWeight: '900', color: isDark ? '#C5A066' : '#6B7280', textAlign: 'center', letterSpacing: 1.5 },
+    orderCardHeaderStore: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, borderBottomWidth: 1, borderBottomColor: isDark ? '#C5A066' : '#E5E7EB', paddingBottom: 12 },
+    orderAddressPremiumStore: { color: isDark ? '#EAD7B1' : '#1F2937', fontSize: 18, fontWeight: '900', flex: 1, marginRight: 8, letterSpacing: 0.5, marginBottom: 0 },
+    timeBadgeStore: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, height: 32, justifyContent: 'center' },
+    timeBadgeTextStore: { fontWeight: '900', fontSize: 13 },
+    paymentRowStore: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+    paymentRowStoreWithComments: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+    paymentBadgeCash: { backgroundColor: '#10B981', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#10B981', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: {width: 0, height: 2} },
+    paymentBadgeCard: { backgroundColor: '#208AEF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: '#208AEF', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: {width: 0, height: 2} },
+    paymentBadgeTextStore: { fontWeight: '900', color: '#FFF', fontSize: 12, textAlign: 'center', letterSpacing: 1 },
+    commentTextPremiumStore: { fontSize: 14, padding: 8, backgroundColor: isDark ? '#151515' : '#F3F4F6', color: isDark ? '#A0A0A0' : '#4B5563', marginBottom: 8, borderRadius: 5, fontStyle: 'italic', borderWidth: 1, borderColor: isDark ? '#333' : 'transparent' },
+    completedContainerStore: { backgroundColor: isDark ? 'rgba(6, 78, 59, 0.3)' : '#ECFDF5', borderColor: isDark ? '#C5A066' : '#10B981', borderWidth: 1, borderRadius: 12, padding: 10, marginTop: 10 },
+    completedTitleStore: { color: isDark ? '#C5A066' : '#10B981', fontWeight: '900', fontSize: 16 },
+    completedSubtitleStore: { color: isDark ? '#EAD7B1' : '#047857', fontSize: 13, marginTop: 4, fontWeight: '600' },
+    completedDriverStore: { color: isDark ? '#A0A0A0' : '#4B5563', marginTop: 10, fontSize: 14, fontWeight: '700' },
+    pendingActionRowStore: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
+    statusPendingPremiumStore: { color: '#FFA000', fontWeight: 'bold', fontSize: 15, marginTop: 0, flex: 1 },
+    cancelBtnWrapperStore: { marginTop: 0, shadowColor: '#E53935', width: 110, borderRadius: 12, shadowOffset: {width:0, height:4}, shadowOpacity:0.4, shadowRadius:8, elevation:5 },
+    cancelBtnBgStore: { backgroundColor: '#E53935', height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    cancelBtnTextStore: { color: '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+    acceptedContainerPremiumStore: { backgroundColor: isDark ? 'rgba(26, 42, 74, 0.5)' : '#EFF6FF', borderColor: isDark ? '#C5A066' : '#3B82F6', borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 10 },
+    acceptedHeaderRowStore: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 },
+    statusAcceptedPremiumStore: { color: isDark ? '#C5A066' : '#2563EB', fontSize: 15, fontWeight: '800' },
+    acceptedTimeStore: { color: isDark ? '#A0A0A0' : '#6B7280', fontSize: 13, marginLeft: 5 },
+    callBtnStore: { marginLeft: 'auto', padding: 6, backgroundColor: isDark ? '#151515' : '#DBEAFE', borderRadius: 12, borderWidth: 1, borderColor: isDark ? '#C5A066' : 'transparent' },
+    callBtnIconStore: { fontSize: 18 },
+    workloadTextPremiumStore: { marginTop: 0, color: isDark ? '#EAD7B1' : '#4B5563', fontSize: 12 },
+    mapBtnWrapperStore: { marginTop: 12, shadowColor: isDark ? '#C5A066' : '#2563EB', borderRadius: 12, shadowOffset: {width:0,height:4}, shadowOpacity:0.4, shadowRadius:8, elevation:5 },
+    mapBtnBgStore: { backgroundColor: isDark ? '#C5A066' : '#2563EB', height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    mapBtnTextStore: { color: isDark ? '#0D0D0D' : '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+    mapModalContainer: { flex: 1 },
+    mapView: { flex: 1 },
+    historyCloseIcon: { fontSize: 26, color: isDark ? '#C5A066' : '#000' },
+    historyFilterBtnSmall: { minWidth: 40, alignItems: 'center', justifyContent: 'center' },
+    historyDateRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20, gap: 10 },
+    historyDateBtn: { flex: 1, marginBottom: 0, backgroundColor: theme.inputBg, borderWidth: 1, borderColor: isDark ? '#C5A066' : theme.border, borderRadius: 12, padding: 10 },
+    historyDateText: { color: theme.text, fontSize: 13 },
+    historySectionTitle: { fontSize: 20, fontWeight: '900', color: theme.text, marginTop: 10, marginBottom: 10 },
+    historyEmptyText: { color: isDark ? '#A0A0A0' : '#666', textAlign: 'center', marginTop: 20 },
   });
 };
