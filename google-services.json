@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "676060632954",
-    "project_id": "deliveryapp-90161",
-    "storage_bucket": "deliveryapp-90161.firebasestorage.app"
+    "project_number": "831843724754",
+    "project_id": "vertex-700df",
+    "storage_bucket": "vertex-700df.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:676060632954:android:29ae749873fb5a94d9e8c3",
+        "mobilesdk_app_id": "1:831843724754:android:98cc77e185344158fd6c0b",
         "android_client_info": {
           "package_name": "com.bestl.deliveryapp"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBSMrRCimh2RoDDzz5imvnnKvH6cE2YOMc"
+          "current_key": "AIzaSyANEaKhB-tE6z--xNYt-32zPd3WpYWvrTg"
         }
       ],
       "services": {

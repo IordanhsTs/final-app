@@ -50,6 +50,44 @@ export default function App() {
     };
   }, []);
 
+  // --- PUSH NOTIFICATIONS SETUP ---
+  useEffect(() => {
+    async function setupPushNotifications() {
+      if (!currentUser) return;
+
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        
+        if (finalStatus !== 'granted') {
+          console.log('Failed to get push token for push notification!');
+          return;
+        }
+
+        // Λήψη του εγγενούς Push Token (FCM στο Android)
+        const tokenData = await Notifications.getDevicePushTokenAsync();
+        const fcmToken = tokenData.data;
+        console.log('FCM Token:', fcmToken);
+        
+        // Αποθήκευση στη Supabase
+        await supabase
+          .from('drivers')
+          .update({ fcm_token: fcmToken })
+          .eq('id', currentUser.id);
+          
+      } catch (e) {
+        console.error('Error getting/saving push token:', e);
+      }
+    }
+
+    setupPushNotifications();
+  }, [currentUser]);
+
   // --- LOCATION + BACKGROUND SERVICE SETUP ---
   useEffect(() => {
     async function setupLocationServices() {

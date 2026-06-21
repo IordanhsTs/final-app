@@ -31,45 +31,6 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     })
     .eq('id', driverId);
 
-  // ── 2. Έλεγχος για νέες παραγγελίες ──────────────────────────────────────
-  try {
-    const { data: pendingOrders, error: ordersError } = await supabase
-      .from('orders')
-      .select('id, address, store_id')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-
-    if (ordersError || !pendingOrders) return;
-
-    // Διαβάζουμε τα IDs που ήδη γνωρίζουμε
-    const knownIdsRaw = await AsyncStorage.getItem('knownPendingOrderIds');
-    const knownIds = new Set(knownIdsRaw ? JSON.parse(knownIdsRaw) : []);
-
-    // Βρίσκουμε παραγγελίες που είναι ΠΡΑΓΜΑΤΙΚΑ νέες
-    const newOrders = pendingOrders.filter(o => !knownIds.has(o.id));
-
-    if (newOrders.length > 0) {
-      for (const order of newOrders) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: '🛵 Νέα Παραγγελία!',
-            body: order.address || 'Νέα παραγγελία διαθέσιμη',
-            sound: 'default',
-            priority: Notifications.AndroidNotificationPriority.MAX,
-            vibrate: [0, 500, 200, 500],
-            data: { orderId: order.id },
-          },
-          trigger: null, // Εμφάνιση αμέσως
-        });
-      }
-    }
-
-    // Αποθηκεύουμε τα τρέχοντα IDs ως "γνωστά"
-    await AsyncStorage.setItem(
-      'knownPendingOrderIds',
-      JSON.stringify(pendingOrders.map(o => o.id))
-    );
-  } catch (e) {
-    console.error('Σφάλμα ελέγχου παραγγελιών σε background:', e);
-  }
+  // Αφαιρέθηκε ο κώδικας για έλεγχο νέων παραγγελιών
+  // Πλέον αυτό γίνεται μέσω Push Notifications (FCM) από τη Supabase.
 });
