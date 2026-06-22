@@ -50,24 +50,22 @@ export default function App() {
     };
   }, []);
 
-  // --- PUSH NOTIFICATIONS SETUP ---
+  // --- NOTIFICATION CHANNEL + PERMISSIONS + FCM TOKEN ---
   useEffect(() => {
-    async function setupPushNotifications() {
+    async function setupNotifications() {
       if (!currentUser) return;
       try {
-        // Δημιουργία Notification Channel για Android
         if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'Παραγγελίες',
+          await Notifications.setNotificationChannelAsync('orders_urgent_v1', {
+            name: 'Παραγγελίες (Επείγον)',
             importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#FF231F7C',
-            sound: true, 
+            sound: 'default',
+            vibrationPattern: [0, 500, 200, 500],
             enableVibrate: true,
+            bypassDnd: true,
           });
         }
-
-        // Ζητάμε άδεια για notifications
+        
         const { status: existingStatus } = await Notifications.getPermissionsAsync();
         let finalStatus = existingStatus;
         if (existingStatus !== 'granted') {
@@ -75,11 +73,13 @@ export default function App() {
           finalStatus = status;
         }
         if (finalStatus !== 'granted') {
-          console.log('Notification permission not granted');
+          console.log('❌ Notification permission not granted');
           return;
         }
-
-        // Λήψη FCM Token και αποθήκευση στη βάση
+        
+        console.log('✅ Notification setup OK, ζητάω FCM Token...');
+        
+        // Λήψη FCM Token (ΔΕΝ ΘΑ ΒΓΑΛΕΙ INVALID_SENDER ΠΛΕΟΝ)
         const tokenData = await Notifications.getDevicePushTokenAsync();
         const fcmToken = tokenData.data;
         console.log('✅ FCM Token:', fcmToken);
@@ -89,12 +89,85 @@ export default function App() {
           .update({ fcm_token: fcmToken })
           .eq('id', currentUser.id);
 
-        console.log('✅ FCM Token αποθηκεύτηκε στη βάση');
       } catch (e) {
-        console.log('Σφάλμα:', e);
+        console.log('Notification setup error:', e);
       }
     }
-    setupPushNotifications();
+    setupNotifications();
+  }, [currentUser]);
+
+  // --- SUPABASE REALTIME: Ακούει ΣΕ ΠΡΑΓΜΑΤΙΚΟ ΧΡΟΝΟ νέες παραγγελίες ---
+  useEffect(() => {
+    if (!currentUser) return;
+
+    console.log('🔌 Σύνδεση στο Supabase Realtime...');
+
+    const channel = supabase
+      .channel('new-orders')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'orders',
+          filter: 'status=eq.pending',
+        },
+        async (payload) => {
+          const newOrder = payload.new;
+          console.log('⚡ REALTIME: Νέα παραγγελία!', newOrder.id, newOrder.address);
+
+          // 1. Τοπική ειδοποίηση
+          try {
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: '🛵 Νέα Παραγγελία!',
+                body: newOrder.address || 'Νέα παραγγελία στο σύστημα.',
+                sound: 'default',
+                priority: Notifications.AndroidNotificationPriority.MAX,
+                vibrate: [0, 500, 200, 500],
+              },
+              trigger: {
+                channelId: 'orders_urgent_v1',
+              },
+            });
+          } catch (e) {
+            console.log('Notification error:', e);
+          }
+
+          // 2. ΑΝΑΓΚΑΣΤΙΚΟΣ ΗΧΟΣ μέσω expo-av (παρακάμπτει τα πάντα)
+          try {
+            const { Audio } = require('expo-av');
+            await Audio.setAudioModeAsync({
+              allowsRecordingIOS: false,
+              staysActiveInBackground: true,
+              playsInSilentModeIOS: true,
+              shouldDuckAndroid: false,
+              playThroughEarpieceAndroid: false,
+            });
+            const { sound } = await Audio.Sound.createAsync(
+              require('./assets/notification.mp3'),
+              { shouldPlay: true, volume: 1.0 }
+            );
+            console.log('🔊 ΗΧΟΣ ΑΝΑΠΑΡΑΓΩΓΗ!');
+            // Αφήνουμε τον ήχο να παίξει και μετά τον ελευθερώνουμε
+            sound.setOnPlaybackStatusUpdate((status) => {
+              if (status.didJustFinish) {
+                sound.unloadAsync();
+              }
+            });
+          } catch (e) {
+            console.log('Audio error:', e);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔌 Realtime status:', status);
+      });
+
+    return () => {
+      console.log('🔌 Αποσύνδεση από Realtime');
+      supabase.removeChannel(channel);
+    };
   }, [currentUser]);
 
   // --- LOCATION + BACKGROUND SERVICE SETUP ---
