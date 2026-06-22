@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "831843724754",
-    "project_id": "vertex-700df",
-    "storage_bucket": "vertex-700df.firebasestorage.app"
+    "project_number": "556631093416",
+    "project_id": "vertex-c0bbd",
+    "storage_bucket": "vertex-c0bbd.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:831843724754:android:98cc77e185344158fd6c0b",
+        "mobilesdk_app_id": "1:556631093416:android:187144d9afaea8e690d29d",
         "android_client_info": {
-          "package_name": "com.bestl.deliveryapp"
+          "package_name": "com.bestl.vertexapp"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyANEaKhB-tE6z--xNYt-32zPd3WpYWvrTg"
+          "current_key": "AIzaSyBw8evYV8fKwjC2wLV54A8ldE77s2QLT_0"
         }
       ],
       "services": {
