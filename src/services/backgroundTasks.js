@@ -14,6 +14,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
     console.error('Σφάλμα Background Location:', error);
     return;
   }
+
   if (!data) return;
 
   const { locations } = data;
@@ -22,7 +23,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 
   if (!driverId || !location) return;
 
-  // ── 1. Ανέβασμα τοποθεσίας ───────────────────────────────────────────────
+  // Ανέβασμα τοποθεσίας στη βάση
   await supabase
     .from('drivers')
     .update({
@@ -30,7 +31,4 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
       longitude: location.coords.longitude,
     })
     .eq('id', driverId);
-
-  // Αφαιρέθηκε ο κώδικας για έλεγχο νέων παραγγελιών
-  // Πλέον αυτό γίνεται μέσω Push Notifications (FCM) από τη Supabase.
 });

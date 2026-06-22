@@ -50,15 +50,15 @@ export default function App() {
     };
   }, []);
 
-  // --- PUSH NOTIFICATIONS SETUP (DISABLED FOR PLAN B2) ---
+  // --- PUSH NOTIFICATIONS SETUP ---
   useEffect(() => {
     async function setupPushNotifications() {
       if (!currentUser) return;
       try {
-        // Δημιουργία καναλιού για τον ήχο
+        // Δημιουργία Notification Channel για Android
         if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('orders_channel_final', {
-            name: 'Νέες Παραγγελίες',
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'Παραγγελίες',
             importance: Notifications.AndroidImportance.MAX,
             vibrationPattern: [0, 250, 250, 250],
             lightColor: '#FF231F7C',
@@ -66,9 +66,32 @@ export default function App() {
             enableVibrate: true,
           });
         }
-        await Notifications.requestPermissionsAsync();
+
+        // Ζητάμε άδεια για notifications
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        if (finalStatus !== 'granted') {
+          console.log('Notification permission not granted');
+          return;
+        }
+
+        // Λήψη FCM Token και αποθήκευση στη βάση
+        const tokenData = await Notifications.getDevicePushTokenAsync();
+        const fcmToken = tokenData.data;
+        console.log('✅ FCM Token:', fcmToken);
+
+        await supabase
+          .from('drivers')
+          .update({ fcm_token: fcmToken })
+          .eq('id', currentUser.id);
+
+        console.log('✅ FCM Token αποθηκεύτηκε στη βάση');
       } catch (e) {
-        console.error('Error setting up notifications:', e);
+        console.log('Σφάλμα:', e);
       }
     }
     setupPushNotifications();
