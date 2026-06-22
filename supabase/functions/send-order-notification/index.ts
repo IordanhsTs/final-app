@@ -42,6 +42,11 @@ serve(async (req) => {
     }
     
     const serviceAccount = JSON.parse(serviceAccountJson)
+    const projectId = serviceAccount.project_id
+    
+    console.log("-----------------------------------------")
+    console.log("USING FIREBASE PROJECT ID:", projectId)
+    console.log("-----------------------------------------")
 
     // Δημιουργούμε το JWT (Google Auth Token)
     const jwtClient = new JWT({
@@ -51,7 +56,6 @@ serve(async (req) => {
     })
     const tokens = await jwtClient.authorize()
 
-    const projectId = serviceAccount.project_id
     const sendPromises = drivers.map(async (driver) => {
       const fcmToken = driver.fcm_token
 
@@ -75,7 +79,12 @@ serve(async (req) => {
                 orderId: String(newOrder.id),
               },
               android: {
-                priority: "high"
+                priority: "HIGH",
+                ttl: "86400s",
+                notification: {
+                  channel_id: "default",
+                  sound: "default"
+                }
               }
             },
           }),
