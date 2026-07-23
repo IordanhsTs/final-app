@@ -1,1 +1,33 @@
+# dependencies (EAS installs them on the server)
 node_modules/
+
+# version control
+.git/
+
+# generated native folders — EAS regenerates them via prebuild (CNG)
+/android
+/ios
+
+# expo / build caches
+.expo/
+dist/
+web-build/
+
+# ── reverse-engineering & analysis artifacts (NOT needed for the build) ──
+jadx/
+jadx_out/
+deliverasnow_apk/
+temp_apk/
+package/
+*.apk
+*.zip
+*.dex
+apk_badging.txt
+apk_manifest.txt
+deliverasnow_manifest.txt
+deliverasnow_permissions.txt
+temp_config.json
+searchBundle.js
+check_drivers.js
+
+# NOTE: .env is intentionally NOT ignored — EAS needs the EXPO_PUBLIC_* vars at build time.

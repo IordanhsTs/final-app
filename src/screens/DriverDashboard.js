@@ -2,47 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, FlatList, RefreshControl, Alert, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
-import { supabase } from '../../supabase';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, onBackendChange } from '../../supabase';
 import { getStyles } from '../styles/globalStyles';
+import { Feather, Ionicons } from '@expo/vector-icons';
 
 const notificationSound = require('../../assets/notification.mp3');
 
 
-async function registerForPushNotificationsAsync() {
-  let token;
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 500, 200, 500],
-      lightColor: '#208AEF',
-      sound: 'default',           // Ήχος συστήματος για background notifications
-      enableVibrate: true,
-    });
-  }
-  if (Device.isDevice) {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    if (finalStatus !== 'granted') {
-      Alert.alert('Προσοχή', 'Δεν δόθηκε άδεια για ειδοποιήσεις! Ενεργοποιήστε τις από τις ρυθμίσεις του κινητού.');
-      return null;
-    }
-    try {
-      const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-      token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-    } catch (error) {
-      console.log('Σφάλμα:', error);
-    }
-  }
-  return token;
-}
 
 export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMode, setIsDarkMode }) {
   const styles = getStyles(isDarkMode);
@@ -72,26 +41,46 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   // State για μηνύματα από το Κέντρο Ελέγχου
   const [systemAlert, setSystemAlert] = useState(null);
+  const [lastLocationUpdate, setLastLocationUpdate] = useState("Περιμένω στίγμα...");
+  const [locationPermStatus, setLocationPermStatus] = useState('...');
+
+  // READ-ONLY-ON-FAILOVER: μπάρα + κλείδωμα ενεργειών όταν τρέχουμε στο εφεδρικό
+  // (standby). Ενημερώνεται σε κάθε αλλαγή backend (το switchTo δεν κάνει reload).
+  const [readOnly, setReadOnly] = useState(isReadOnly());
+  useEffect(() => {
+    const off = onBackendChange(() => setReadOnly(isReadOnly()));
+    return off;
+  }, []);
+
+  // MULTI-TENANT: η πόλη για το navigation deep-link έρχεται από τον companies
+  // (όχι καρφωτή). Fallback «Φλώρινα» — σωστό για τον 1ο πελάτη + backward-compatible
+  // όσο δεν υπάρχει hook/companies (τότε το query αποτυγχάνει σιωπηλά).
+  const [city, setCity] = useState('Φλώρινα');
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.schema('public').from('companies')
+          .select('city').eq('schema_name', getTenantSchema()).maybeSingle();
+        if (data?.city) setCity(data.city);
+      } catch (_) {}
+    })();
+  }, []);
 
   useEffect(() => {
     fetchOrders();
 
-    async function setupPushNotifications() {
-      try {
-        const token = await registerForPushNotificationsAsync();
-        if (token) {
-          await supabase.from('drivers').update({ expo_push_token: token }).eq('id', currentUser.id);
-        }
-      } catch (e) {
-        console.log('Σφάλμα στο push setup:', e);
-      }
-    }
+    // Φόρτωση κατάστασης άδειας τοποθεσίας απευθείας από το OS (όχι cache)
+    const checkPerms = async () => {
+      const bgPerm = await Location.getBackgroundPermissionsAsync();
+      setLocationPermStatus(bgPerm.status);
+    };
+    checkPerms();
 
-    const tokenTimer = setTimeout(setupPushNotifications, 1500);
+
 
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
-      fetchOrders(); // Όταν η εφαρμογή είναι ανοιχτή αλλά χάθηκε το WebSocket connection
+      fetchOrders();
     });
 
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
@@ -100,13 +89,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     const channel = supabase
       .channel(`driver_orders_${currentUser.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-        // Σε κάθε αλλαγή (INSERT, UPDATE, DELETE) φέρνουμε ξανά τα δεδομένα (ανανέωση UI)
+      .on('postgres_changes', { event: '*', schema: getTenantSchema(), table: 'orders' }, () => {
+        // Μόνο ανανέωση UI — ο ήχος παίζεται αποκλειστικά μέσω FCM push notification
         fetchOrders();
-        // Ηχητική ειδοποίηση και δόνηση ΜΟΝΟ σε νέα παραγγελία (INSERT)
-        if (payload.eventType === 'INSERT' && payload.new?.status === 'pending') {
-          triggerNotification();
-        }
       })
       .subscribe();
 
@@ -120,33 +105,78 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       .on('broadcast', { event: 'admin_message' }, (payload) => {
         const data = payload.payload;
         if (!data) return;
-        if (data.target_type === 'driver' && (data.target_id === 'all' || data.target_id === currentUser.id)) {
+        const targets = Array.isArray(data.target_ids) ? data.target_ids : [data.target_id];
+        if (data.target_type === 'driver' && (targets.includes('all') || targets.includes(currentUser.id))) {
           setSystemAlert(data.message);
           triggerNotification();
         }
       })
       .subscribe();
 
-    return () => { 
-      clearTimeout(tokenTimer);
+    // ─── ΛΗΨΗ ΑΛΛΑΓΩΝ GPS ΣΕ ΠΡΑΓΜΑΤΙΚΟ ΧΡΟΝΟ ΓΙΑ MONITORING ───
+    const driverChannel = supabase
+      .channel(`driver_monitor_${currentUser.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` }, (payload) => {
+        if (payload.new.latitude && payload.new.longitude) {
+          const now = new Date();
+          setLastLocationUpdate(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
+        }
+      })
+      .subscribe();
+
+    return () => {
       if (notificationListener) notificationListener.remove();
       if (responseListener) responseListener.remove();
       supabase.removeChannel(channel); 
       supabase.removeChannel(systemAlertChannel);
+      supabase.removeChannel(driverChannel);
       appStateSubscription.remove();
     };
   }, []); // Αφαιρέσαμε το player από εδώ για να μην κλείνει η σύνδεση!
 
   // Η συνάρτηση πλέον απλά πατάει το "Play"
-  async function triggerNotification() {
-    Vibration.vibrate([0, 500, 200, 500]);
-    try {
-      if (player) {
-        player.seekTo(0); // Επαναφορά του ήχου στην αρχή
-        player.play();
+  async function triggerNotification(isDirect = false) {
+    if (isDirect) {
+      // Συνεχόμενη δόνηση
+      Vibration.vibrate([0, 500, 200], true);
+      
+      const playSound = () => {
+        try {
+          if (player) {
+            player.seekTo(0);
+            player.play();
+          }
+        } catch (e) { console.log("Audio Error:", e); }
+      };
+
+      playSound(); // Αρχικό παίξιμο
+      
+      let count = 0;
+      const interval = setInterval(() => {
+        playSound();
+        count++;
+        if (count >= 3) { // 3 επαναλήψεις * 1500ms = 4.5 δευτερόλεπτα
+          clearInterval(interval);
+          Vibration.cancel();
+        }
+      }, 1500);
+
+      // Ασφάλεια τερματισμού στα 5 δευτερόλεπτα
+      setTimeout(() => {
+        clearInterval(interval);
+        Vibration.cancel();
+      }, 5000);
+      
+    } else {
+      Vibration.vibrate([0, 500, 200, 500]);
+      try {
+        if (player) {
+          player.seekTo(0); // Επαναφορά του ήχου στην αρχή
+          player.play();
+        }
+      } catch (e) { 
+        console.log("Audio Error:", e); 
       }
-    } catch (e) { 
-      console.log("Audio Error:", e); 
     }
   }
 
@@ -198,6 +228,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   async function acceptOrder(orderId) {
+    if (isReadOnly()) {
+      Alert.alert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
+      return;
+    }
     setConfirmConfig({
       title: "Αποδοχή Παραγγελίας",
       message: "Είστε σίγουρος πως θέλετε να κάνετε αποδοχή;",
@@ -222,6 +256,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   async function completeOrder(orderId) {
+    if (isReadOnly()) {
+      Alert.alert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
+      return;
+    }
     setConfirmConfig({
       title: "Ολοκλήρωση Παραγγελίας",
       message: "Είστε σίγουρος πως η παραγγελία παραδόθηκε;",
@@ -235,7 +273,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   async function handleDriverLogout() {
-    await supabase.from('drivers').update({ is_active: false }).eq('id', currentUser.id);
+    // Καθάρισμα σε ΟΛΑ τα backends (όχι μόνο στο ενεργό) ώστε να σταματήσουν
+    // οι ειδοποιήσεις παραγγελιών από οποιοδήποτε σύστημα.
+    await clearDriverPresenceEverywhere(currentUser.id);
+    await supabase.removeAllChannels(); // FORCE KILL ALL LISTENERS
     await supabase.auth.signOut();
     setCurrentUser(null);
   }
@@ -245,14 +286,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       Alert.alert("Σφάλμα", "Δεν υπάρχει διαθέσιμο τηλέφωνο.");
       return;
     }
-    Alert.alert(
-      "Κλήση",
-      `Θέλετε να καλέσετε το κατάστημα:\n${name};\n(${phone})`,
-      [
-        { text: "Όχι", style: "cancel" },
-        { text: "Ναι", onPress: () => Linking.openURL(`tel:${phone}`) }
-      ]
-    );
+    setConfirmConfig({
+      title: "Κλήση",
+      message: `Θέλετε να καλέσετε το κατάστημα:\n${name}\n(${phone})`,
+      onConfirm: () => {
+        setConfirmModalVisible(false);
+        Linking.openURL(`tel:${phone}`);
+      }
+    });
+    setConfirmModalVisible(true);
   };
 
   const handleDateChange = (event, selectedDate) => {
@@ -297,17 +339,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB', paddingBottom: 12 }}>
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
             <Text style={{ fontWeight: '900', fontSize: 18, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
-              🏢 {item.store_name}
+              <Ionicons name="storefront-outline" size={16} color={isDarkMode ? '#C5A066' : '#8A7347'} /> {item.store_name}
             </Text>
             {item.store_phone ? (
               <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
-                <Text style={{ fontSize: 16 }}>📞</Text>
+                <Feather name="phone-call" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
               </TouchableOpacity>
             ) : null}
           </View>
           <View style={{ backgroundColor: timeBgColor, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, justifyContent: 'center', marginLeft: 8 }}>
             <Text style={{color: timeColor, fontWeight:'900', fontSize: 13}}>
-              {isCompleted ? `⏱️ ${totalMins} λ.` : `${mins} λ.`}
+              {isCompleted ? <Text><Feather name="clock" size={12} /> {totalMins} λ.</Text> : `${mins} λ.`}
             </Text>
           </View>
         </View>
@@ -318,13 +360,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: item.comments ? 12 : 4 }}>
             <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: {width: 0, height: 2} }}>
               <Text style={{fontWeight: '900', color: '#FFF', fontSize: 12, textAlign: 'center', letterSpacing: 1}}>
-                {item.payment_method === 'cash' ? '💵 ΜΕΤΡΗΤΑ' : '💳 ΚΑΡΤΑ'}
+                {item.payment_method === 'cash' ? <><Feather name="dollar-sign" size={12} color="#FFF" /> ΜΕΤΡΗΤΑ</> : <><Feather name="credit-card" size={12} color="#FFF" /> ΚΑΡΤΑ</>}
               </Text>
             </View>
           </View>
         ) : null}
         
-        {item.comments ? <Text style={[styles.commentText, { fontSize: 14, padding: 8, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', color: isDarkMode ? '#A0A0A0' : '#4B5563' }]}>💬 {item.comments}</Text> : null}
+        {item.comments ? <Text style={[styles.commentText, { fontSize: 14, padding: 8, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', color: isDarkMode ? '#A0A0A0' : '#4B5563' }]}><Feather name="message-square" size={12} /> {item.comments}</Text> : null}
         
         {item.status === 'pending' && (
           <TouchableOpacity style={[styles.premiumButtonWrapper, { shadowColor: '#C5A066' }]} onPress={() => acceptOrder(item.id)}>
@@ -339,7 +381,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <TouchableOpacity 
               style={[styles.premiumButtonWrapper, { flex: 1, marginTop: 0, shadowColor: isDarkMode ? '#000' : '#CCC' }]} 
               onPress={() => {
-                const fullDestination = `${item.address}, Φλώρινα, Ελλάδα`;
+                const fullDestination = `${item.address}, ${city}, Ελλάδα`;
                 Linking.openURL(Platform.select({
                   ios: `maps:0,0?q=${fullDestination}`,
                   android: `google.navigation:q=${fullDestination}`
@@ -347,7 +389,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
               }}
             >
               <View style={[styles.premiumButtonBackground, { backgroundColor: isDarkMode ? '#333333' : '#E5E7EB' }]}>
-                <Text style={[styles.premiumButtonText, { color: isDarkMode ? '#EAD7B1' : '#374151' }]}>📍 ΠΛΟΗΓΗΣΗ</Text>
+                <Text style={[styles.premiumButtonText, { color: isDarkMode ? '#EAD7B1' : '#374151' }]}><Feather name="navigation" size={14} /> ΠΛΟΗΓΗΣΗ</Text>
               </View>
             </TouchableOpacity>
 
@@ -356,7 +398,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
               onPress={() => completeOrder(item.id)}
             >
               <View style={[styles.premiumButtonBackground, { backgroundColor: '#10B981' }]}>
-                <Text style={[styles.premiumButtonText, { color: '#FFF' }]}>✔️ ΠΑΡΑΔΟΣΗ</Text>
+                <Text style={[styles.premiumButtonText, { color: '#FFF' }]}><Feather name="check-circle" size={14} /> ΠΑΡΑΔΟΣΗ</Text>
               </View>
             </TouchableOpacity>
           </View>
@@ -364,7 +406,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
         {isCompleted && (
           <Text style={{ color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: isDarkMode ? '#333' : '#E5E7EB', paddingTop: 10 }}>
-            ⏱️ Συνολικά: {totalMins} λ. (Αναμονή: {pendingMins} λ. | Διανομή: {deliveryMins} λ.)
+            <Feather name="clock" size={12} /> Συνολικά: {totalMins} λ. (Αναμονή: {pendingMins} λ. | Διανομή: {deliveryMins} λ.)
           </Text>
         )}
       </View>
@@ -405,12 +447,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         <View style={{ flex: 1, alignItems: 'flex-start' }}>
           <Text style={{ fontSize: 10, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1 }}>VERTEX DRIVER</Text>
           <Text style={[styles.driverName, { color: isDarkMode ? '#EAD7B1' : '#121212', fontSize: 18 }]} numberOfLines={1}>{currentUser.full_name}</Text>
+          <Text style={{ fontSize: 10, color: isDarkMode ? '#888' : '#777', marginTop: 2 }}><Feather name="map-pin" size={10} /> Στίγμα: {lastLocationUpdate}</Text>
         </View>
         
         <View style={{ flex: 1, alignItems: 'center' }}>
           <TouchableOpacity onPress={() => setIsDarkMode(!isDarkMode)}>
             <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, borderRadius: 20 }}>
-              <Text style={{ fontSize: 18 }}>{isDarkMode ? '☀️' : '🌙'}</Text>
+              <Feather name={isDarkMode ? 'sun' : 'moon'} size={20} color={isDarkMode ? '#EAD7B1' : '#121212'} />
             </View>
           </TouchableOpacity>
         </View>
@@ -418,11 +461,21 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         <View style={{ flex: 1, alignItems: 'flex-end' }}>
           <TouchableOpacity onPress={() => setMenuVisible(true)}>
             <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20 }}>
-              <Text style={{ fontSize: 16, color: isDarkMode ? '#FFF' : '#000', fontWeight: 'bold' }}>☰</Text>
+              <Feather name="menu" size={22} color={isDarkMode ? '#FFF' : '#000'} />
             </View>
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* READ-ONLY-ON-FAILOVER: μπάρα όταν τρέχουμε στο εφεδρικό (standby) */}
+      {readOnly && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, backgroundColor: isDarkMode ? 'rgba(251,191,36,0.12)' : '#FFFBEB', borderBottomWidth: 1, borderBottomColor: isDarkMode ? 'rgba(251,191,36,0.25)' : '#FDE68A' }}>
+          <Feather name="alert-triangle" size={14} color={isDarkMode ? '#FBBF24' : '#B45309'} style={{ marginRight: 6 }} />
+          <Text style={{ color: isDarkMode ? '#FBBF24' : '#B45309', fontSize: 12, fontWeight: '700', textAlign: 'center', flexShrink: 1 }}>
+            Εφεδρική λειτουργία — προσωρινά μόνο ανάγνωση
+          </Text>
+        </View>
+      )}
 
       <View style={[styles.tabContainer, { backgroundColor: isDarkMode ? '#121212' : '#F8F9FA', padding: 12, borderBottomWidth: 0 }]}>
         <View style={{ flexDirection: 'row', backgroundColor: isDarkMode ? '#1A1A1A' : '#E9ECEF', borderRadius: 16, padding: 4, flex: 1, borderWidth: 1, borderColor: isDarkMode ? '#333' : '#DEE2E6' }}>
@@ -447,10 +500,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={styles.menuContent}>
             <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); setIsHistoryVisible(true); }}>
-              <Text style={styles.menuItemText}>📜 Ιστορικό / Στατιστικά</Text>
+              <Text style={styles.menuItemText}><Feather name="bar-chart-2" size={16} /> Ιστορικό / Στατιστικά</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleDriverLogout}>
-              <Text style={[styles.menuItemText, { color: '#EF4444' }]}>🚪 Έξοδος</Text>
+              <Text style={[styles.menuItemText, { color: '#EF4444' }]}><Feather name="log-out" size={16} /> Έξοδος</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -462,7 +515,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Ιστορικό</Text>
             <TouchableOpacity onPress={() => setIsHistoryVisible(false)}>
-              <Text style={{ fontSize: 26, color: isDarkMode ? '#FFF' : '#000' }}>✖</Text>
+              <Feather name="x" size={26} color={isDarkMode ? '#FFF' : '#000'} />
             </TouchableOpacity>
           </View>
 
@@ -561,7 +614,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             elevation: 10
           }}>
             <Text style={{ fontSize: 20, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', marginBottom: 16 }}>
-              📢 Νέο Μήνυμα από Κέντρο
+              <Feather name="bell" size={20} color={isDarkMode ? '#F0EBE2' : '#1E1A14'} /> Νέο Μήνυμα από Κέντρο
             </Text>
             <View style={{ backgroundColor: isDarkMode ? '#2A2520' : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
               <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14', lineHeight: 24 }}>

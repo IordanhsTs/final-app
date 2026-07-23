@@ -32,6 +32,12 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
     const { data, error } = await supabase.from('drivers').select('*').eq('id', authData.user.id).single();
 
     if (data && !error) {
+      if (data.is_blocked === true) {
+        Alert.alert('Λογαριασμός Μπλοκαρισμένος', 'Η πρόσβαση στο λογαριασμό σας έχει διακοπεί.');
+        await supabase.auth.signOut();
+        setLoading(false);
+        return;
+      }
       await supabase.from('drivers').update({ is_active: true }).eq('id', data.id);
       setCurrentUser(data);
     } else {
@@ -145,8 +151,8 @@ const createStyles = () => StyleSheet.create({
   cardWrapper: {
     borderRadius: 24,
     padding: 2, // Πάχος για το glowing border effect (Ρήγμα φωτός)
-    backgroundColor: '#208AEF',
-    shadowColor: '#208AEF',
+    backgroundColor: '#C5A066',
+    shadowColor: '#C5A066',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
     shadowRadius: 15,

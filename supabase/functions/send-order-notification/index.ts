@@ -17,17 +17,37 @@ serve(async (req) => {
 
     const newOrder = payload.record
 
+    // MULTI-TENANT: το webhook payload περιέχει το `schema` του πίνακα που πυροδότησε
+    // το trigger (π.χ. 'co_florina'). Ρωτάμε τους οδηγούς ΕΚΕΙΝΗΣ της εταιρίας.
+    // Fallback σε 'public' για συμβατότητα με το σημερινό production (πριν το cutover).
+    const schema = payload.schema && payload.schema !== 'public' ? payload.schema : 'public'
+    console.log('Order schema (tenant):', schema)
+
     // Δημιουργούμε Supabase Client για να βρούμε τους οδηγούς
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // Βρίσκουμε όλους τους διαθέσιμους οδηγούς που έχουν fcm_token
-    // (Μπορείς να προσθέσεις επιπλέον φίλτρα εδώ π.χ. eq('status', 'active'))
+    // Βρίσκουμε τους διαθέσιμους οδηγούς ΤΗΣ ΕΤΑΙΡΙΑΣ που έχουν fcm_token.
+    //
+    // HEARTBEAT GATE (last_seen): ειδοποιούμε ΜΟΝΟ οδηγούς που ενημέρωσαν θέση
+    // πρόσφατα — δηλαδή είναι όντως ΣΕ ΒΑΡΔΙΑ. Το native GPS service γράφει κάθε
+    // 10s, άρα ένα ενεργό κινητό έχει πάντα φρέσκο last_seen. Ένα κλειστό/
+    // αποσυνδεδεμένο κινητό (π.χ. έληξε το session και δεν καθαρίστηκε το
+    // is_active/fcm_token) σταματά να ενημερώνει → εξαιρείται ΑΥΤΟΜΑΤΑ εδώ, ώστε
+    // να ΜΗΝ έρχονται ειδοποιήσεις εκτός βάρδιας. Self-healing: δεν εξαρτάται από
+    // το αν πρόλαβε ο client να καθαρίσει την παρουσία του.
+    const FRESH_MS = 3 * 60 * 1000 // 3 λεπτά (native interval = 10s → άφθονο περιθώριο)
+    const freshSince = new Date(Date.now() - FRESH_MS).toISOString()
+
     const { data: drivers, error: driverError } = await supabase
+      .schema(schema)
       .from('drivers')
       .select('fcm_token')
       .not('fcm_token', 'is', null)
+      .eq('is_active', true)
+      .eq('is_blocked', false)
+      .gt('last_seen', freshSince)
 
     if (driverError || !drivers || drivers.length === 0) {
       console.log("No drivers with FCM tokens found.")
@@ -82,8 +102,8 @@ serve(async (req) => {
                 priority: "HIGH",
                 ttl: "86400s",
                 notification: {
-                  channel_id: "default",
-                  sound: "default"
+                  channel_id: "orders_urgent_v3",
+                  sound: "notification"
                 }
               }
             },

@@ -40,3 +40,17 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# ── Reverse-engineering / build artifacts (cleanup 2026-07-24) ──
+*.zip
+/jadx/
+/jadx_out/
+/deliverasnow_apk/
+/temp_apk/
+/package/
+apk_badging.txt
+apk_manifest.txt
+deliverasnow_manifest.txt
+deliverasnow_permissions.txt
+temp_config.json
+supabase/.temp/

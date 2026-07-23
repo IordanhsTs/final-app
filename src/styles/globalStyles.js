@@ -2,26 +2,28 @@ import { StyleSheet } from 'react-native';
 
 export const Colors = {
   light: {
-    background: '#F8F9FA', // Πιο premium off-white (αντί για γαλάζιο)
+    background: '#F8F5F0', // Base (60%)
     card: '#FFFFFF',
-    text: '#121212',
-    subtitle: '#6B7280',
-    border: '#E5E7EB',
-    inputBg: '#F3F4F6',
-    toggleBg: '#E5E7EB',
-    commentBg: '#F3F4F6',
-    acceptedBg: '#F0FDF4'
+    text: '#1E1A14', // Secondary (30%)
+    subtitle: '#5C5248',
+    border: '#E5DED4',
+    inputBg: '#F4F0EB',
+    toggleBg: '#EDE7DF',
+    commentBg: '#F4F0EB',
+    acceptedBg: '#F0FDF4',
+    accent: '#C5A066', // Accent (10%)
   },
   dark: {
-    background: '#0D0D0D', // Vertex Premium Charcoal
-    card: 'rgba(20, 20, 20, 0.9)', // Vertex Glass Card
-    text: '#EAD7B1', // Premium Light Gold
-    subtitle: '#A0A0A0', // Muted Gray
-    border: '#C5A066', // Vertex Brass/Gold Accent
-    inputBg: '#151515',
-    toggleBg: '#151515',
-    commentBg: '#1A1A1A',
-    acceptedBg: 'rgba(6, 78, 59, 0.3)'
+    background: '#0D0D0D', // Base (60%)
+    card: 'rgba(28, 28, 28, 0.95)', // Glass effect over deep background
+    text: '#F0EBE2', // Secondary (30%)
+    subtitle: '#A89C8E',
+    border: '#2A2520',
+    inputBg: '#111111',
+    toggleBg: '#221E1A',
+    commentBg: '#111111',
+    acceptedBg: 'rgba(34,197,94,0.08)',
+    accent: '#D4A853', // Bright Gold Accent for dark mode
   }
 };
 
@@ -70,9 +72,9 @@ export const getStyles = (isDark) => {
       borderWidth: 1,
       borderColor: isDark ? '#C5A066' : theme.border
     },
-    tabActiveDarkDriver: { backgroundColor: '#1A1A1A', borderRadius: 12, borderWidth: 1, borderColor: '#208AEF', shadowColor: '#208AEF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 2 },
-    tabActiveLightDriver: { backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#208AEF', shadowColor: '#208AEF', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 2 },
-    tabTextActiveDriver: { color: '#208AEF', fontWeight: '900', letterSpacing: 1 },
+    tabActiveDarkDriver: { backgroundColor: theme.toggleBg, borderRadius: 12, borderWidth: 1, borderColor: theme.accent, shadowColor: theme.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 2 },
+    tabActiveLightDriver: { backgroundColor: theme.card, borderRadius: 12, borderWidth: 1, borderColor: theme.accent, shadowColor: theme.accent, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 2 },
+    tabTextActiveDriver: { color: theme.accent, fontWeight: '900', letterSpacing: 1 },
     premiumButtonWrapper: { marginTop: 12, borderRadius: 12, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
     premiumButtonBackground: { height: 50, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     premiumButtonText: { fontSize: 14, fontWeight: '900', letterSpacing: 1.5, textTransform: 'uppercase' },
@@ -87,14 +89,14 @@ export const getStyles = (isDark) => {
     mapBtn: { backgroundColor: '#4CAF50', padding: 8, borderRadius: 5, marginTop: 10, alignItems: 'center' },
     closeModalBtn: { backgroundColor: isDark ? '#222' : '#333', padding: 15, paddingTop: 40, alignItems: 'center' },
     logoutText: { color: 'red', fontWeight: 'bold' },
-    driverName: { fontWeight: 'bold', color: '#208AEF' },
+    driverName: { fontWeight: 'bold', color: theme.accent },
     
     tabContainer: { flexDirection: 'row', backgroundColor: theme.card, borderBottomWidth: 1, borderColor: theme.border },
     tab: { flex: 1, padding: 15, alignItems: 'center' },
     tabText: { color: theme.subtitle },
-    activeTabText: { fontWeight: 'bold', color: '#208AEF' },
+    activeTabText: { fontWeight: 'bold', color: theme.accent },
     
-    acceptButton: { backgroundColor: '#208AEF', padding: 12, marginTop: 10, alignItems: 'center', borderRadius: 5 },
+    acceptButton: { backgroundColor: theme.accent, padding: 12, marginTop: 10, alignItems: 'center', borderRadius: 5 },
     completeButton: { backgroundColor: '#4CAF50', padding: 12, marginTop: 10, alignItems: 'center', borderRadius: 5 },
 
     // Menu & History Modal
@@ -108,12 +110,12 @@ export const getStyles = (isDark) => {
     modalTitle: { fontSize: 24, fontWeight: '900', color: theme.text },
     filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
     filterBtn: { paddingVertical: 8, paddingHorizontal: 12, backgroundColor: theme.inputBg, borderRadius: 20, borderWidth: 1, borderColor: theme.border },
-    filterBtnActive: { backgroundColor: '#208AEF', borderColor: '#208AEF' },
+    filterBtnActive: { backgroundColor: theme.accent, borderColor: theme.accent },
     filterBtnText: { color: theme.text, fontSize: 14, fontWeight: '600' },
     filterBtnTextActive: { color: '#FFF', fontWeight: '900' },
     statRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, gap: 10 },
     statBox: { flex: 1, backgroundColor: theme.card, padding: 15, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: theme.border, elevation: 2 },
-    statValue: { fontSize: 24, fontWeight: '900', color: '#208AEF', marginVertical: 5 },
+    statValue: { fontSize: 24, fontWeight: '900', color: theme.accent, marginVertical: 5 },
     statLabel: { fontSize: 13, color: theme.subtitle, textAlign: 'center', fontWeight: '700' },
     tableRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.border },
     tableCell: { color: theme.text, fontSize: 16, flex: 1 },
@@ -127,7 +129,7 @@ export const getStyles = (isDark) => {
     alertModalButtonContainer: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
     alertModalButtonCancel: { flex: 1, paddingVertical: 12, backgroundColor: theme.inputBg, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: theme.border },
     alertModalButtonCancelText: { color: theme.text, fontWeight: 'bold', fontSize: 16 },
-    alertModalButtonConfirm: { flex: 1, paddingVertical: 12, backgroundColor: '#208AEF', borderRadius: 8, alignItems: 'center' },
+    alertModalButtonConfirm: { flex: 1, paddingVertical: 12, backgroundColor: theme.accent, borderRadius: 8, alignItems: 'center' },
     alertModalButtonConfirmText: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
 
     // Extracted Store Dashboard Premium Styles
@@ -182,9 +184,9 @@ export const getStyles = (isDark) => {
     callBtnStore: { marginLeft: 'auto', padding: 6, backgroundColor: isDark ? '#151515' : '#DBEAFE', borderRadius: 12, borderWidth: 1, borderColor: isDark ? '#C5A066' : 'transparent' },
     callBtnIconStore: { fontSize: 18 },
     workloadTextPremiumStore: { marginTop: 0, color: isDark ? '#EAD7B1' : '#4B5563', fontSize: 12 },
-    mapBtnWrapperStore: { marginTop: 12, shadowColor: isDark ? '#C5A066' : '#2563EB', borderRadius: 12, shadowOffset: {width:0,height:4}, shadowOpacity:0.4, shadowRadius:8, elevation:5 },
-    mapBtnBgStore: { backgroundColor: isDark ? '#C5A066' : '#2563EB', height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-    mapBtnTextStore: { color: isDark ? '#0D0D0D' : '#FFF', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+    mapBtnWrapperStore: { marginTop: 12, shadowColor: theme.accent, borderRadius: 12, shadowOffset: {width:0,height:4}, shadowOpacity:0.4, shadowRadius:8, elevation:5 },
+    mapBtnBgStore: { backgroundColor: theme.accent, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    mapBtnTextStore: { color: isDark ? '#0D0D0D' : '#1E1A14', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
     mapModalContainer: { flex: 1 },
     mapView: { flex: 1 },
     historyCloseIcon: { fontSize: 26, color: isDark ? '#C5A066' : '#000' },

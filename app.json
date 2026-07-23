@@ -1,17 +1,17 @@
 {
   "expo": {
-    "name": "final-app",
+    "name": "Vertex",
     "slug": "final-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "finalapp",
-    "icon": "./assets/icon.png",
+    "scheme": "vertex",
+    "icon": "./assets/icon_v2.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash_v2.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#121212"
     },
     "ios": {
       "supportsTablet": true
@@ -20,22 +20,28 @@
       "package": "com.bestl.vertexapp",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/adaptive_v2.png",
+        "backgroundColor": "#121212"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.WAKE_LOCK",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon_v2.png"
     },
     "plugins": [
       [
@@ -52,16 +58,24 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Χρειαζόμαστε την τοποθεσία σας για να βλέπουν τα καταστήματα πού βρίσκεστε όταν έχετε παραγγελία.",
-          "isAndroidBackgroundLocationEnabled": true
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       "expo-asset",
       "@react-native-community/datetimepicker"
     ],
+    "owner": "iordanistss-team",
     "extra": {
       "eas": {
-        "projectId": "6a36e0c8-c8d8-466f-809d-c022ec036fa4"
+        "projectId": "c4f8f723-9bc4-4e6e-9d95-0d5bef646526"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c4f8f723-9bc4-4e6e-9d95-0d5bef646526"
     }
   }
 }
