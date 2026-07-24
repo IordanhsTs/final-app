@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, FlatList, RefreshControl, Alert, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, RefreshControl, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
@@ -35,9 +35,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [pickerTarget, setPickerTarget] = useState('start');
   const [historyData, setHistoryData] = useState([]);
   
-  // States για Custom Modal Επιβεβαίωσης
+  // States για Custom Modal Επιβεβαίωσης (και για απλά ενημερωτικά μηνύματα — βλ. showAlert
+  // παρακάτω· έτσι όλα τα μηνύματα προς τον χρήστη μοιράζονται το ίδιο styled modal αντί να
+  // εναλλάσσονται με το native Alert.alert).
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
-  const [confirmConfig, setConfirmConfig] = useState({ title: '', message: '', onConfirm: null });
+  const [confirmConfig, setConfirmConfig] = useState({ title: '', message: '', onConfirm: null, alertOnly: false, confirmLabel: 'Ναι' });
 
   // State για μηνύματα από το Κέντρο Ελέγχου
   const [systemAlert, setSystemAlert] = useState(null);
@@ -227,9 +229,22 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     }
   }
 
+  // Ενημερωτικό μήνυμα (μόνο ΟΚ) μέσα από το ίδιο styled modal που χρησιμοποιούν οι
+  // επιβεβαιώσεις — αντί για το ασύμβατο-με-το-theme native Alert.alert.
+  function showAlert(title, message) {
+    setConfirmConfig({
+      title,
+      message,
+      alertOnly: true,
+      confirmLabel: 'ΟΚ',
+      onConfirm: () => setConfirmModalVisible(false),
+    });
+    setConfirmModalVisible(true);
+  }
+
   async function acceptOrder(orderId) {
     if (isReadOnly()) {
-      Alert.alert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
+      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
       return;
     }
     setConfirmConfig({
@@ -247,7 +262,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         if (data && data.length > 0) {
           fetchOrders();
         } else {
-          Alert.alert('Αποτυχία', 'Η παραγγελία έγινε ήδη αποδεκτή.');
+          showAlert('Αποτυχία', 'Η παραγγελία έγινε ήδη αποδεκτή.');
           fetchOrders();
         }
       }
@@ -257,7 +272,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   async function completeOrder(orderId) {
     if (isReadOnly()) {
-      Alert.alert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
+      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
       return;
     }
     setConfirmConfig({
@@ -283,7 +298,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   const handleCall = (phone, name) => {
     if (!phone) {
-      Alert.alert("Σφάλμα", "Δεν υπάρχει διαθέσιμο τηλέφωνο.");
+      showAlert("Σφάλμα", "Δεν υπάρχει διαθέσιμο τηλέφωνο.");
       return;
     }
     setConfirmConfig({
@@ -585,11 +600,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <Text style={styles.alertModalTitle}>{confirmConfig.title}</Text>
             <Text style={styles.alertModalMessage}>{confirmConfig.message}</Text>
             <View style={styles.alertModalButtonContainer}>
-              <TouchableOpacity style={styles.alertModalButtonCancel} onPress={() => setConfirmModalVisible(false)}>
-                <Text style={styles.alertModalButtonCancelText}>Όχι</Text>
-              </TouchableOpacity>
+              {!confirmConfig.alertOnly && (
+                <TouchableOpacity style={styles.alertModalButtonCancel} onPress={() => setConfirmModalVisible(false)}>
+                  <Text style={styles.alertModalButtonCancelText}>Όχι</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={styles.alertModalButtonConfirm} onPress={confirmConfig.onConfirm}>
-                <Text style={styles.alertModalButtonConfirmText}>Ναι</Text>
+                <Text style={styles.alertModalButtonConfirmText}>{confirmConfig.confirmLabel || 'Ναι'}</Text>
               </TouchableOpacity>
             </View>
           </View>
