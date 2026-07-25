@@ -100,8 +100,9 @@ export const getStyles = (isDark) => {
     completeButton: { backgroundColor: '#4CAF50', padding: 12, marginTop: 10, alignItems: 'center', borderRadius: 5 },
 
     // Menu & History Modal
-    menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-start', alignItems: 'flex-end' },
-    menuContent: { width: 220, backgroundColor: theme.card, marginTop: 60, marginRight: 15, borderRadius: 12, padding: 10, elevation: 8, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 6 },
+    // Το μενού ανοίγει ΑΡΙΣΤΕΡΑ, κάτω από το hamburger που μετακόμισε εκεί.
+    menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-start', alignItems: 'flex-start' },
+    menuContent: { width: 230, backgroundColor: theme.card, marginTop: 60, marginLeft: 15, borderRadius: 12, padding: 10, elevation: 8, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 6 },
     menuItem: { paddingVertical: 18, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: theme.border },
     menuItemText: { fontSize: 17, color: theme.text, fontWeight: '700' },
     

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, FlatList, RefreshControl, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
+import { formatKm, formatCountdown, orderDurations, minutesSinceCreated } from '../utils/orderInfo';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
@@ -21,8 +22,26 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   const [pendingOrders, setPendingOrders] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
+  // Προγραμματισμένες: το κατάστημα τις έστειλε με καθυστέρηση. Ο διανομέας τις
+  // ΒΛΕΠΕΙ με αντίστροφη μέτρηση αλλά δεν μπορεί να τις πάρει πριν λάχει η ώρα.
+  const [scheduledOrders, setScheduledOrders] = useState([]);
   const [activeTab, setActiveTab] = useState('pending');
   const [refreshing, setRefreshing] = useState(false);
+  // Ρολόι για τις αντίστροφες μετρήσεις (χτυπά ανά δευτερόλεπτο μόνο όταν χρειάζεται).
+  const [now, setNow] = useState(new Date());
+
+  // ── Συναγερμός ανάθεσης από τον διαχειριστή ──
+  const [assignmentAlert, setAssignmentAlert] = useState(null);
+  // Παραγγελίες που κρατούσε ήδη ο διανομέας στο προηγούμενο fetch — για να
+  // ξεχωρίσουμε τη ΝΕΑ ανάθεση από τα υπόλοιπα updates.
+  const knownMyOrderIds = useRef(null);
+  // Παραγγελίες που πάτησε ΜΟΝΟΣ του «Αποδοχή»: δεν πρέπει να χτυπήσει συναγερμός.
+  const selfAcceptedIds = useRef(new Set());
+  const alarmTimers = useRef([]);
+  // Ποιες ήταν προγραμματισμένες στο τελευταίο fetch. Χρειάζεται ως ref (και όχι
+  // state) γιατί το διαβάζει ο realtime handler, που ζει σε effect με άδειο
+  // dependency array — ένα state θα ήταν παγωμένο στην αρχική τιμή του.
+  const scheduledIds = useRef(new Set());
   
   // States για Ιστορικό & Μενού
   const [menuVisible, setMenuVisible] = useState(false);
@@ -89,10 +108,28 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       fetchOrders(); // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background
     });
 
+    // Απελευθέρωση των προγραμματισμένων που έφτασε η ώρα τους ('scheduled' →
+    // 'pending'). Ατομικό UPDATE στη βάση — ακίνδυνο να το καλούν πολλοί μαζί.
+    const releaseDue = async () => {
+      try { await supabase.rpc('release_due_orders'); } catch (_) {}
+    };
+    releaseDue();
+    const releaseTimer = setInterval(releaseDue, 15000);
+
     const channel = supabase
       .channel(`driver_orders_${currentUser.id}`)
-      .on('postgres_changes', { event: '*', schema: getTenantSchema(), table: 'orders' }, () => {
-        // Μόνο ανανέωση UI — ο ήχος παίζεται αποκλειστικά μέσω FCM push notification
+      .on('postgres_changes', { event: '*', schema: getTenantSchema(), table: 'orders' }, (payload) => {
+        // Προγραμματισμένη παραγγελία που μόλις «ωρίμασε»: ο πελάτης θέλει να ηχεί
+        // σαν κανονική νέα παραγγελία ώστε να καταλάβει ο διανομέας ότι ήρθε.
+        // Δεν κοιτάμε το payload.old — το realtime στέλνει εκεί μόνο το κλειδί.
+        if (
+          payload.eventType === 'UPDATE' &&
+          payload.new?.status === 'pending' &&
+          scheduledIds.current.has(payload.new.id)
+        ) {
+          scheduledIds.current.delete(payload.new.id);
+          triggerNotification();
+        }
         fetchOrders();
       })
       .subscribe();
@@ -110,7 +147,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         const targets = Array.isArray(data.target_ids) ? data.target_ids : [data.target_id];
         if (data.target_type === 'driver' && (targets.includes('all') || targets.includes(currentUser.id))) {
           setSystemAlert(data.message);
-          triggerNotification();
+          // ΣΥΝΕΧΟΜΕΝΟΣ ήχος μέχρι το «Το είδα (ΟΚ)» (αίτημα πελάτη): το μήνυμα
+          // του κέντρου δεν πρέπει να περνά απαρατήρητο πάνω στη μηχανή.
+          startAlarm(0);
         }
       })
       .subscribe();
@@ -127,60 +166,84 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       .subscribe();
 
     return () => {
+      clearInterval(releaseTimer);
       if (notificationListener) notificationListener.remove();
       if (responseListener) responseListener.remove();
-      supabase.removeChannel(channel); 
+      supabase.removeChannel(channel);
       supabase.removeChannel(systemAlertChannel);
       supabase.removeChannel(driverChannel);
       appStateSubscription.remove();
     };
   }, []); // Αφαιρέσαμε το player από εδώ για να μην κλείνει η σύνδεση!
 
-  // Η συνάρτηση πλέον απλά πατάει το "Play"
-  async function triggerNotification(isDirect = false) {
-    if (isDirect) {
-      // Συνεχόμενη δόνηση
-      Vibration.vibrate([0, 500, 200], true);
-      
-      const playSound = () => {
-        try {
-          if (player) {
-            player.seekTo(0);
-            player.play();
-          }
-        } catch (e) { console.log("Audio Error:", e); }
-      };
+  // Ρολόι για τις αντίστροφες μετρήσεις: ανά δευτερόλεπτο ΜΟΝΟ όσο υπάρχει
+  // προγραμματισμένη παραγγελία, αλλιώς ανά λεπτό (χρόνοι αναμονής).
+  useEffect(() => {
+    const everySecond = scheduledOrders.length > 0;
+    const t = setInterval(() => setNow(new Date()), everySecond ? 1000 : 60000);
+    return () => clearInterval(t);
+  }, [scheduledOrders.length]);
 
-      playSound(); // Αρχικό παίξιμο
-      
-      let count = 0;
-      const interval = setInterval(() => {
-        playSound();
-        count++;
-        if (count >= 3) { // 3 επαναλήψεις * 1500ms = 4.5 δευτερόλεπτα
-          clearInterval(interval);
-          Vibration.cancel();
-        }
-      }, 1500);
+  // ── Ηχητικοί συναγερμοί ────────────────────────────────────────────────────
+  // Χρησιμοποιούμε το `loop` του expo-audio αντί για setInterval με seekTo: ο ήχος
+  // επαναλαμβάνεται χωρίς κενά και σταματά ακαριαία, χωρίς να κυνηγάμε timers.
+  //
+  // Δύο σενάρια, όπως τα ζήτησε ο πελάτης:
+  //   • ΑΝΑΘΕΣΗ από διαχειριστή → δυνατά και επαναλαμβανόμενα για 15", σταματά
+  //     είτε με «Το είδα (ΟΚ)» είτε μόλις περάσουν τα 15".
+  //   • ΜΗΝΥΜΑ από διαχειριστή → συνεχόμενα, μέχρι να πατηθεί το ΟΚ.
+  const ASSIGNMENT_ALARM_MS = 15000;
 
-      // Ασφάλεια τερματισμού στα 5 δευτερόλεπτα
-      setTimeout(() => {
-        clearInterval(interval);
-        Vibration.cancel();
-      }, 5000);
-      
-    } else {
-      Vibration.vibrate([0, 500, 200, 500]);
-      try {
-        if (player) {
-          player.seekTo(0); // Επαναφορά του ήχου στην αρχή
-          player.play();
-        }
-      } catch (e) { 
-        console.log("Audio Error:", e); 
+  function clearAlarmTimers() {
+    alarmTimers.current.forEach(clearTimeout);
+    alarmTimers.current = [];
+  }
+
+  function stopAlarm() {
+    clearAlarmTimers();
+    Vibration.cancel();
+    try {
+      if (player) {
+        player.loop = false;
+        player.pause();
       }
+    } catch (e) { console.log('Audio Error:', e); }
+  }
+
+  // `autoStopMs = 0` σημαίνει «μέχρι να το σταματήσει ο χρήστης».
+  function startAlarm(autoStopMs) {
+    clearAlarmTimers();
+    Vibration.vibrate([0, 600, 400], true); // επαναλαμβανόμενη δόνηση
+    try {
+      if (player) {
+        player.loop = true;
+        player.volume = 1.0;
+        player.seekTo(0);
+        player.play();
+      }
+    } catch (e) { console.log('Audio Error:', e); }
+
+    if (autoStopMs > 0) {
+      alarmTimers.current.push(setTimeout(stopAlarm, autoStopMs));
     }
   }
+
+  // Απλή, μία φορά ειδοποίηση (χωρίς επανάληψη).
+  function triggerNotification() {
+    Vibration.vibrate([0, 500, 200, 500]);
+    try {
+      if (player) {
+        player.loop = false;
+        player.seekTo(0);
+        player.play();
+      }
+    } catch (e) {
+      console.log("Audio Error:", e);
+    }
+  }
+
+  // Σταματάμε κάθε ήχο/δόνηση όταν φεύγει η οθόνη, ώστε να μη μείνει να χτυπά.
+  useEffect(() => stopAlarm, []);
 
   useEffect(() => {
     if (isHistoryVisible) fetchHistory();
@@ -207,25 +270,52 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   async function fetchOrders() {
     setRefreshing(true);
     try {
-      const { data: storesList } = await supabase.from('stores').select('id, name, phone');
+      // Η διεύθυνση του καταστήματος μπαίνει στην κάρτα (μικρά γράμματα, κάτω):
+      // ο διανομέας θέλει να ξέρει ΑΠΟ ΠΟΥ παραλαμβάνει, όχι μόνο το όνομα.
+      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address');
       const storesMap = {};
-      if (storesList) storesList.forEach(s => { storesMap[s.id] = { name: s.name, phone: s.phone }; });
+      if (storesList) storesList.forEach(s => { storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address }; });
 
-      const { data: pending } = await supabase.from('orders').select('*').eq('status', 'pending').order('created_at', { ascending: false });
-      const { data: mine } = await supabase.from('orders').select('*').eq('status', 'accepted').eq('driver_id', currentUser.id).order('created_at', { ascending: false });
+      // ΠΑΛΙΟΤΕΡΕΣ ΠΡΩΤΑ (ascending): η παραγγελία που περιμένει περισσότερο πρέπει
+      // να είναι στην κορυφή — αλλιώς μια αργοπορημένη «θάβεται» από τις νέες.
+      const { data: pending } = await supabase.from('orders').select('*').eq('status', 'pending').order('created_at', { ascending: true });
+      const { data: mine } = await supabase.from('orders').select('*').eq('status', 'accepted').eq('driver_id', currentUser.id).order('created_at', { ascending: true });
+      // Προγραμματισμένες: όσο πιο κοντά στην ώρα αποστολής, τόσο πιο πάνω.
+      const { data: scheduled } = await supabase.from('orders').select('*').eq('status', 'scheduled').order('scheduled_at', { ascending: true });
 
-      const mapStoreName = (orders) => (orders || []).map(order => ({
+      const withStore = (orders) => (orders || []).map(order => ({
         ...order,
         store_name: storesMap[order.store_id]?.name || 'Κεντρικό Κατάστημα',
-        store_phone: storesMap[order.store_id]?.phone || null
+        store_phone: storesMap[order.store_id]?.phone || null,
+        store_address: storesMap[order.store_id]?.address || null,
       }));
 
-      setPendingOrders(mapStoreName(pending));
-      setMyOrders(mapStoreName(mine));
-    } catch (e) { 
-      console.log("Fetch Error:", e); 
-    } finally { 
-      setRefreshing(false); 
+      const mineMapped = withStore(mine);
+
+      // ── Ανίχνευση ΝΕΑΣ ανάθεσης από τον διαχειριστή ──
+      // Νέα παραγγελία στη λίστα μου που ΔΕΝ την πάτησα εγώ = μου την ανέθεσε ή
+      // μου τη μετέθεσε ο διαχειριστής → δυνατός επαναλαμβανόμενος συναγερμός.
+      if (knownMyOrderIds.current !== null) {
+        const fresh = mineMapped.filter(
+          o => !knownMyOrderIds.current.has(o.id) && !selfAcceptedIds.current.has(o.id)
+        );
+        if (fresh.length > 0) {
+          setAssignmentAlert(fresh[0]);
+          startAlarm(ASSIGNMENT_ALARM_MS);
+        }
+      }
+      knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));
+
+      const scheduledMapped = withStore(scheduled);
+      scheduledIds.current = new Set(scheduledMapped.map(o => o.id));
+
+      setPendingOrders(withStore(pending));
+      setMyOrders(mineMapped);
+      setScheduledOrders(scheduledMapped);
+    } catch (e) {
+      console.log("Fetch Error:", e);
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -252,19 +342,44 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       message: "Είστε σίγουρος πως θέλετε να κάνετε αποδοχή;",
       onConfirm: async () => {
         setConfirmModalVisible(false);
+        // Σημειώνουμε ότι την πήραμε ΕΜΕΙΣ, ώστε να μη χτυπήσει ο συναγερμός
+        // ανάθεσης όταν εμφανιστεί στη λίστα μας.
+        selfAcceptedIds.current.add(orderId);
+
         const { data } = await supabase
           .from('orders')
           .update({ status: 'accepted', driver_id: currentUser.id, accepted_at: new Date().toISOString() })
           .eq('id', orderId)
           .eq('status', 'pending')
           .select();
-  
+
         if (data && data.length > 0) {
           fetchOrders();
         } else {
+          selfAcceptedIds.current.delete(orderId);
           showAlert('Αποτυχία', 'Η παραγγελία έγινε ήδη αποδεκτή.');
           fetchOrders();
         }
+      }
+    });
+    setConfirmModalVisible(true);
+  }
+
+  // ΠΑΡΑΛΑΒΗ: το ενδιάμεσο στάδιο. Ο διανομέας φτάνει στο κατάστημα, φορτώνει και
+  // το δηλώνει — μετά το ίδιο κουμπί γίνεται «ΠΑΡΑΔΟΣΗ».
+  async function pickUpOrder(orderId) {
+    if (isReadOnly()) {
+      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
+      return;
+    }
+    setConfirmConfig({
+      title: "Παραλαβή Παραγγελίας",
+      message: "Επιβεβαιώνετε ότι παραλάβατε την παραγγελία από το κατάστημα;",
+      confirmLabel: 'Παραλαβή',
+      onConfirm: async () => {
+        setConfirmModalVisible(false);
+        await supabase.from('orders').update({ picked_up_at: new Date().toISOString() }).eq('id', orderId);
+        fetchOrders();
       }
     });
     setConfirmModalVisible(true);
@@ -330,59 +445,128 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     }
   };
 
+  // Άνοιγμα πλοήγησης προς οποιαδήποτε διεύθυνση (κατάστημα ή πελάτη).
+  const openNavigation = (destination) => {
+    const full = `${destination}, ${city}, Ελλάδα`;
+    Linking.openURL(Platform.select({
+      ios: `maps:0,0?q=${full}`,
+      android: `google.navigation:q=${full}`,
+    }));
+  };
+
   const renderOrderItem = ({ item }) => {
     const isCompleted = item.status === 'completed';
-    const mins = Math.floor((new Date() - new Date(item.created_at)) / 60000);
-    
-    const tCreate = new Date(item.created_at);
-    const tAccept = item.accepted_at ? new Date(item.accepted_at) : null;
-    const tComplete = item.completed_at ? new Date(item.completed_at) : null;
-    
-    const totalMins = tComplete ? Math.floor((tComplete - tCreate) / 60000) : mins;
-    const deliveryMins = tComplete && tAccept ? Math.floor((tComplete - tAccept) / 60000) : 0;
-    const pendingMins = tAccept ? Math.floor((tAccept - tCreate) / 60000) : totalMins;
+    const isScheduled = item.status === 'scheduled';
+    const mins = minutesSinceCreated(item, now);
+
+    // Η αρίθμηση ξεκινά από το 1 ΑΝΑ ΟΜΑΔΑ (προγραμματισμένες / ενεργές /
+    // αποδεκτές) και όχι συνεχόμενα — η λίστα «Ενεργές» δείχνει δύο ομάδες μαζί.
+    const group = isScheduled
+      ? scheduledOrders
+      : item.status === 'pending' ? pendingOrders : myOrders;
+    const displayNumber = group.findIndex(o => o.id === item.id) + 1;
+
+    // ΤΟ «-1» ΔΙΟΡΘΩΘΗΚΕ ΕΔΩ: οι χρόνοι περνούν από το orderDurations, που δεν
+    // επιστρέφει ποτέ αρνητικά (απόκλιση ρολογιού κινητού/server).
+    const { activeMins, acceptedMins, totalMins } = orderDurations(item, now);
+
+    // Πριν την παραλαβή πλοηγούμαστε στο ΚΑΤΑΣΤΗΜΑ, μετά στον ΠΕΛΑΤΗ.
+    const pickedUp = !!item.picked_up_at;
+    const navTarget = !pickedUp && item.store_address ? item.store_address : item.address;
 
     // Χρώματα χρόνου: Πράσινο μέχρι 9 λεπτά, Κόκκινο από 10 και πάνω. Ολοκληρωμένες πάντα πράσινες.
-    const isWarning = !isCompleted && mins > 9;
+    const isWarning = !isCompleted && !isScheduled && mins > 9;
     const timeColor = isWarning ? '#EF4444' : '#10B981';
-    const timeBgColor = isWarning 
-      ? (isDarkMode ? '#3a1e1e' : '#FFEBEE') 
+    const timeBgColor = isWarning
+      ? (isDarkMode ? '#3a1e1e' : '#FFEBEE')
       : (isDarkMode ? '#1e3a24' : '#E8F5E9');
 
+    const remainingMs = item.scheduled_at ? new Date(item.scheduled_at) - now : 0;
+    const km = formatKm(item.distance_km);
+
     return (
-      <View style={styles.orderCard}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB', paddingBottom: 12 }}>
+      <View style={[styles.orderCard, isScheduled && { opacity: 0.9, borderStyle: 'dashed', borderWidth: 1, borderColor: isDarkMode ? '#444' : '#D1D5DB' }]}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB', paddingBottom: 10 }}>
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={{ fontWeight: '900', fontSize: 18, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
+            {/* Αύξων αριθμός θέσης μέσα στη λίστα */}
+            <View style={{ minWidth: 22, height: 22, borderRadius: 6, backgroundColor: isDarkMode ? '#2A2A2A' : '#EEF0F3', alignItems: 'center', justifyContent: 'center', marginRight: 8, paddingHorizontal: 4 }}>
+              <Text style={{ fontSize: 12, fontWeight: '900', color: isDarkMode ? '#9CA3AF' : '#6B7280' }}>{displayNumber}</Text>
+            </View>
+            <Text style={{ fontWeight: '900', fontSize: 17, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
               <Ionicons name="storefront-outline" size={16} color={isDarkMode ? '#C5A066' : '#8A7347'} /> {item.store_name}
             </Text>
+          </View>
+
+          {/* Εικονίδια ενεργειών πάνω δεξιά: τηλέφωνο + ΠΛΟΗΓΗΣΗ (ίδιο ύφος) */}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {item.store_phone ? (
-              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
+              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
                 <Feather name="phone-call" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
               </TouchableOpacity>
             ) : null}
-          </View>
-          <View style={{ backgroundColor: timeBgColor, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, justifyContent: 'center', marginLeft: 8 }}>
-            <Text style={{color: timeColor, fontWeight:'900', fontSize: 13}}>
-              {isCompleted ? <Text><Feather name="clock" size={12} /> {totalMins} λ.</Text> : `${mins} λ.`}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={[styles.orderAddress, { color: isDarkMode ? '#EAD7B1' : '#1F2937', fontSize: 17, marginBottom: 12 }]}>{item.address}</Text>
-        
-        {item.payment_method ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: item.comments ? 12 : 4 }}>
-            <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, justifyContent: 'center', alignItems: 'center', shadowColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', shadowOpacity: 0.3, shadowRadius: 4, shadowOffset: {width: 0, height: 2} }}>
-              <Text style={{fontWeight: '900', color: '#FFF', fontSize: 12, textAlign: 'center', letterSpacing: 1}}>
-                {item.payment_method === 'cash' ? <><Feather name="dollar-sign" size={12} color="#FFF" /> ΜΕΤΡΗΤΑ</> : <><Feather name="credit-card" size={12} color="#FFF" /> ΚΑΡΤΑ</>}
+            {!isScheduled && (
+              <TouchableOpacity
+                onPress={() => openNavigation(navTarget)}
+                style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}
+                accessibilityLabel="Πλοήγηση"
+              >
+                <Feather name="navigation" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
+              </TouchableOpacity>
+            )}
+            <View style={{ backgroundColor: isScheduled ? (isDarkMode ? '#262626' : '#F3F4F6') : timeBgColor, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, justifyContent: 'center', marginLeft: 6 }}>
+              <Text style={{ color: isScheduled ? (isDarkMode ? '#9CA3AF' : '#6B7280') : timeColor, fontWeight: '900', fontSize: 13 }}>
+                {isScheduled
+                  ? formatCountdown(remainingMs)
+                  : isCompleted
+                    ? `${totalMins} λ.`
+                    : `${mins} λ.`}
               </Text>
             </View>
           </View>
+        </View>
+
+        <Text style={[styles.orderAddress, { color: isDarkMode ? '#EAD7B1' : '#1F2937', fontSize: 17, marginBottom: 6 }]}>{item.address}</Text>
+
+        {/* Διεύθυνση καταστήματος αποστολής — μικρά γράμματα, από κάτω */}
+        {item.store_address ? (
+          <Text style={{ fontSize: 12, color: isDarkMode ? '#8A8A8A' : '#6B7280', marginBottom: 8 }} numberOfLines={1}>
+            <Feather name="corner-up-right" size={11} /> Από: {item.store_address}
+          </Text>
         ) : null}
-        
+
+        {/* Μικρές πληροφοριακές ετικέτες: τρόπος πληρωμής + απόσταση */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: item.comments ? 10 : 4 }}>
+          {item.payment_method ? (
+            <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
+              <Text style={{ fontWeight: '800', color: '#FFF', fontSize: 10, letterSpacing: 0.5 }}>
+                {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
+              </Text>
+            </View>
+          ) : null}
+          {km ? (
+            <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
+              <Feather name="map-pin" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
+              <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{km}</Text>
+            </View>
+          ) : null}
+          {pickedUp && !isCompleted ? (
+            <View style={{ backgroundColor: isDarkMode ? '#1e3a24' : '#E8F5E9', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
+              <Text style={{ fontWeight: '800', color: '#10B981', fontSize: 10 }}>ΠΑΡΕΛΗΦΘΗ</Text>
+            </View>
+          ) : null}
+        </View>
+
         {item.comments ? <Text style={[styles.commentText, { fontSize: 14, padding: 8, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', color: isDarkMode ? '#A0A0A0' : '#4B5563' }]}><Feather name="message-square" size={12} /> {item.comments}</Text> : null}
-        
+
+        {/* Προγραμματισμένη: μόνο ενημέρωση, δεν γίνεται αποδοχή πριν την ώρα της */}
+        {isScheduled && (
+          <View style={{ marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: isDarkMode ? '#1C1C1C' : '#F9FAFB' }}>
+            <Text style={{ fontSize: 13, color: isDarkMode ? '#9CA3AF' : '#6B7280', textAlign: 'center' }}>
+              <Feather name="clock" size={12} /> Θα σταλεί σε {formatCountdown(remainingMs)}
+            </Text>
+          </View>
+        )}
+
         {item.status === 'pending' && (
           <TouchableOpacity style={[styles.premiumButtonWrapper, { shadowColor: '#C5A066' }]} onPress={() => acceptOrder(item.id)}>
             <View style={[styles.premiumButtonBackground, { backgroundColor: '#C5A066' }]}>
@@ -390,38 +574,25 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             </View>
           </TouchableOpacity>
         )}
-        
-        {item.status === 'accepted' && (
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 15, gap: 10 }}>
-            <TouchableOpacity 
-              style={[styles.premiumButtonWrapper, { flex: 1, marginTop: 0, shadowColor: isDarkMode ? '#000' : '#CCC' }]} 
-              onPress={() => {
-                const fullDestination = `${item.address}, ${city}, Ελλάδα`;
-                Linking.openURL(Platform.select({
-                  ios: `maps:0,0?q=${fullDestination}`,
-                  android: `google.navigation:q=${fullDestination}`
-                }));
-              }}
-            >
-              <View style={[styles.premiumButtonBackground, { backgroundColor: isDarkMode ? '#333333' : '#E5E7EB' }]}>
-                <Text style={[styles.premiumButtonText, { color: isDarkMode ? '#EAD7B1' : '#374151' }]}><Feather name="navigation" size={14} /> ΠΛΟΗΓΗΣΗ</Text>
-              </View>
-            </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.premiumButtonWrapper, { flex: 1, marginTop: 0, shadowColor: '#10B981' }]} 
-              onPress={() => completeOrder(item.id)}
-            >
-              <View style={[styles.premiumButtonBackground, { backgroundColor: '#10B981' }]}>
-                <Text style={[styles.premiumButtonText, { color: '#FFF' }]}><Feather name="check-circle" size={14} /> ΠΑΡΑΔΟΣΗ</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+        {/* ΕΝΑ κουμπί σε ΟΛΟ το πλάτος, σε δύο στάδια: πρώτα ΠΑΡΑΛΑΒΗ (φόρτωση
+            από το κατάστημα) και μετά ΠΑΡΑΔΟΣΗ. Η πλοήγηση μετακόμισε πάνω. */}
+        {item.status === 'accepted' && (
+          <TouchableOpacity
+            style={[styles.premiumButtonWrapper, { shadowColor: pickedUp ? '#10B981' : '#208AEF' }]}
+            onPress={() => (pickedUp ? completeOrder(item.id) : pickUpOrder(item.id))}
+          >
+            <View style={[styles.premiumButtonBackground, { backgroundColor: pickedUp ? '#10B981' : '#208AEF' }]}>
+              <Text style={[styles.premiumButtonText, { color: '#FFF' }]}>
+                {pickedUp ? 'ΠΑΡΑΔΟΣΗ' : 'ΠΑΡΑΛΑΒΗ'}
+              </Text>
+            </View>
+          </TouchableOpacity>
         )}
 
         {isCompleted && (
           <Text style={{ color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: isDarkMode ? '#333' : '#E5E7EB', paddingTop: 10 }}>
-            <Feather name="clock" size={12} /> Συνολικά: {totalMins} λ. (Αναμονή: {pendingMins} λ. | Διανομή: {deliveryMins} λ.)
+            <Feather name="clock" size={12} /> Συνολικά: {totalMins} λ. (Ενεργή: {activeMins} λ. | Αποδεκτή: {acceptedMins} λ.)
           </Text>
         )}
       </View>
@@ -459,27 +630,41 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   return (
     <View style={styles.container}>
       <View style={[styles.header, { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: isDarkMode ? '#1A1A1A' : '#FFFFFF', zIndex: 10 }]}>
-        <View style={{ flex: 1, alignItems: 'flex-start' }}>
-          <Text style={{ fontSize: 10, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1 }}>VERTEX DRIVER</Text>
-          <Text style={[styles.driverName, { color: isDarkMode ? '#EAD7B1' : '#121212', fontSize: 18 }]} numberOfLines={1}>{currentUser.full_name}</Text>
-          <Text style={{ fontSize: 10, color: isDarkMode ? '#888' : '#777', marginTop: 2 }}><Feather name="map-pin" size={10} /> Στίγμα: {lastLocationUpdate}</Text>
-        </View>
-        
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <TouchableOpacity onPress={() => setIsDarkMode(!isDarkMode)}>
-            <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, borderRadius: 20 }}>
-              <Feather name={isDarkMode ? 'sun' : 'moon'} size={20} color={isDarkMode ? '#EAD7B1' : '#121212'} />
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        <View style={{ flex: 1, alignItems: 'flex-end' }}>
-          <TouchableOpacity onPress={() => setMenuVisible(true)}>
+        {/* Οι δύο πλευρές έχουν ΙΔΙΟ πλάτος επίτηδες: αλλιώς ο κεντρικός τίτλος
+            μετατοπίζεται οπτικά προς τη στενότερη πλευρά και δεν είναι πραγματικά
+            «στη μέση» όπως ζητήθηκε. */}
+        {/* ΑΡΙΣΤΕΡΑ: hamburger (το dark/light mode μετακόμισε ΜΕΣΑ στο μενού) */}
+        <View style={{ width: 110, alignItems: 'flex-start' }}>
+          <TouchableOpacity onPress={() => setMenuVisible(true)} accessibilityLabel="Μενού">
             <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20 }}>
               <Feather name="menu" size={22} color={isDarkMode ? '#FFF' : '#000'} />
             </View>
           </TouchableOpacity>
         </View>
+
+        {/* ΚΕΝΤΡΟ: ο τίτλος */}
+        <View style={{ flex: 1, alignItems: 'center' }}>
+          <Text style={{ fontSize: 12, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1.5 }}>VERTEX DRIVER</Text>
+        </View>
+
+        {/* ΔΕΞΙΑ: ολόκληρο το όνομα του συνδεδεμένου διανομέα */}
+        <View style={{ width: 110, alignItems: 'flex-end' }}>
+          <Text
+            style={[styles.driverName, { color: isDarkMode ? '#EAD7B1' : '#121212', fontSize: 13, textAlign: 'right' }]}
+            numberOfLines={2}
+          >
+            {currentUser.full_name}
+          </Text>
+        </View>
+      </View>
+
+      {/* Το «Στίγμα» έφυγε από τον header (συγκρουόταν με το menu/όνομα) και
+          κατέβηκε σε δική του διακριτική μπάρα κατάστασης. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 4, backgroundColor: isDarkMode ? '#141414' : '#F3F4F6' }}>
+        <Feather name="map-pin" size={10} color={isDarkMode ? '#888' : '#777'} />
+        <Text style={{ fontSize: 10, color: isDarkMode ? '#888' : '#777', marginLeft: 4 }}>
+          Στίγμα: {lastLocationUpdate}
+        </Text>
       </View>
 
       {/* READ-ONLY-ON-FAILOVER: μπάρα όταν τρέχουμε στο εφεδρικό (standby) */}
@@ -503,11 +688,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         </View>
       </View>
 
-      <FlatList 
-        data={activeTab === 'pending' ? pendingOrders : myOrders} 
+      {/* Στην καρτέλα «Ενεργές» μπαίνουν πρώτα οι προγραμματισμένες (με αντίστροφη
+          μέτρηση, χωρίς κουμπί αποδοχής) και ακολουθούν οι κανονικές. Έτσι ο
+          διανομέας βλέπει τι έρχεται και οργανώνεται. */}
+      <FlatList
+        data={activeTab === 'pending' ? [...scheduledOrders, ...pendingOrders] : myOrders}
         keyExtractor={(item) => item.id.toString()}
-        renderItem={renderOrderItem} 
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchOrders} />} 
+        renderItem={renderOrderItem}
+        // Χωρίς αυτό η FlatList δεν ξαναζωγραφίζει τις γραμμές όταν χτυπά το ρολόι,
+        // και οι χρόνοι/αντίστροφες μετρήσεις θα «πάγωναν».
+        extraData={now}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchOrders} />}
       />
 
       {/* Hamburger Menu Modal */}
@@ -516,6 +707,14 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={styles.menuContent}>
             <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); setIsHistoryVisible(true); }}>
               <Text style={styles.menuItemText}><Feather name="bar-chart-2" size={16} /> Ιστορικό / Στατιστικά</Text>
+            </TouchableOpacity>
+            {/* Το dark/light mode ζει πλέον εδώ μέσα (αίτημα πελάτη) — ο header
+                κράτησε μόνο menu / τίτλο / όνομα. Το μενού μένει ανοιχτό ώστε να
+                βλέπει αμέσως την αλλαγή. */}
+            <TouchableOpacity style={styles.menuItem} onPress={() => setIsDarkMode(!isDarkMode)}>
+              <Text style={styles.menuItemText}>
+                <Feather name={isDarkMode ? 'sun' : 'moon'} size={16} /> {isDarkMode ? 'Φωτεινό θέμα' : 'Σκούρο θέμα'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleDriverLogout}>
               <Text style={[styles.menuItemText, { color: '#EF4444' }]}><Feather name="log-out" size={16} /> Έξοδος</Text>
@@ -645,7 +844,44 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 borderRadius: 12,
                 alignItems: 'center'
               }}
-              onPress={() => setSystemAlert(null)}
+              onPress={() => { stopAlarm(); setSystemAlert(null); }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── ΣΥΝΑΓΕΡΜΟΣ ΑΝΑΘΕΣΗΣ ΑΠΟ ΤΟΝ ΔΙΑΧΕΙΡΙΣΤΗ ───
+          Χτυπά δυνατά και επαναλαμβανόμενα για 15" ώστε να μη χαθεί η ανάθεση.
+          Σταματά είτε με το ΟΚ είτε μόλις περάσουν τα 15" — ο ήχος σταματά μόνος
+          του, το παράθυρο όμως μένει μέχρι να το δει ο διανομέας. */}
+      <Modal visible={!!assignmentAlert} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 400,
+            backgroundColor: isDarkMode ? '#1C1C1C' : '#FFFFFF',
+            borderRadius: 24,
+            padding: 24,
+            borderTopWidth: 4,
+            borderTopColor: '#EF4444',
+            elevation: 10,
+          }}>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', marginBottom: 16 }}>
+              <Feather name="bell" size={20} /> Νέα ανάθεση παραγγελίας
+            </Text>
+            <View style={{ backgroundColor: isDarkMode ? '#2A2520' : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: isDarkMode ? '#C5A066' : '#8A7347', marginBottom: 4 }}>
+                {assignmentAlert?.store_name}
+              </Text>
+              <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14' }}>
+                {assignmentAlert?.address}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+              onPress={() => { stopAlarm(); setAssignmentAlert(null); setActiveTab('my_orders'); }}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
             </TouchableOpacity>
