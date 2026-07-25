@@ -53,6 +53,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [pickerMode, setPickerMode] = useState('date');
   const [pickerTarget, setPickerTarget] = useState('start');
   const [historyData, setHistoryData] = useState([]);
+  // 'summary' = στατιστικά + ανά κατάστημα (όπως πριν) · 'detailed' = μία γραμμή ανά παραγγελία.
+  const [historyView, setHistoryView] = useState('summary');
   
   // States για Custom Modal Επιβεβαίωσης (και για απλά ενημερωτικά μηνύματα — βλ. showAlert
   // παρακάτω· έτσι όλα τα μηνύματα προς τον χρήστη μοιράζονται το ίδιο styled modal αντί να
@@ -777,18 +779,78 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <View style={styles.statBox}><Text style={[styles.statValue, {color:'#8E44AD'}]}>{coffeeCount}</Text><Text style={styles.statLabel}>Καφέδες (1.00€)</Text></View>
           </View>
 
-          <Text style={[styles.modalTitle, {fontSize: 20, marginTop: 10, marginBottom: 10}]}>Ανά Κατάστημα</Text>
-          <FlatList
-            data={Object.entries(storeCounts).sort((a,b) => b[1] - a[1])}
-            keyExtractor={item => item[0]}
-            renderItem={({item}) => (
-              <View style={styles.tableRow}>
-                <Text style={styles.tableCell}>{item[0]}</Text>
-                <Text style={styles.tableCellBold}>{item[1]}</Text>
-              </View>
-            )}
-            ListEmptyComponent={<Text style={{color: isDarkMode ? '#AAA' : '#666', textAlign:'center', marginTop:20}}>Καμία παραγγελία σε αυτό το διάστημα.</Text>}
-          />
+          <View style={[styles.filterRow, { marginTop: 10 }]}>
+            <TouchableOpacity
+              style={[styles.filterBtn, { flex: 1, alignItems: 'center' }, historyView === 'summary' && styles.filterBtnActive]}
+              onPress={() => setHistoryView('summary')}
+            >
+              <Text style={[styles.filterBtnText, historyView === 'summary' && styles.filterBtnTextActive]}>Ανά Κατάστημα</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterBtn, { flex: 1, alignItems: 'center' }, historyView === 'detailed' && styles.filterBtnActive]}
+              onPress={() => setHistoryView('detailed')}
+            >
+              <Text style={[styles.filterBtnText, historyView === 'detailed' && styles.filterBtnTextActive]}>Αναλυτικό Ιστορικό</Text>
+            </TouchableOpacity>
+          </View>
+
+          {historyView === 'summary' ? (
+            <FlatList
+              data={Object.entries(storeCounts).sort((a,b) => b[1] - a[1])}
+              keyExtractor={item => item[0]}
+              renderItem={({item}) => (
+                <View style={styles.tableRow}>
+                  <Text style={styles.tableCell}>{item[0]}</Text>
+                  <Text style={styles.tableCellBold}>{item[1]}</Text>
+                </View>
+              )}
+              ListEmptyComponent={<Text style={{color: isDarkMode ? '#AAA' : '#666', textAlign:'center', marginTop:20}}>Καμία παραγγελία σε αυτό το διάστημα.</Text>}
+            />
+          ) : (
+            <FlatList
+              data={[...historyData].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))}
+              keyExtractor={item => item.id.toString()}
+              renderItem={({ item }) => {
+                const { acceptedMins } = orderDurations(item);
+                const completed = item.completed_at ? new Date(item.completed_at) : null;
+                const km = formatKm(item.distance_km);
+                return (
+                  <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <Text style={{ fontWeight: '800', fontSize: 15, color: isDarkMode ? '#EAD7B1' : '#1F2937', flexShrink: 1 }} numberOfLines={1}>
+                        {item.stores?.name || 'Άγνωστο Κατάστημα'}
+                      </Text>
+                      {completed ? (
+                        <Text style={{ fontSize: 12, color: isDarkMode ? '#9CA3AF' : '#6B7280' }}>
+                          {completed.getDate()}/{completed.getMonth() + 1} {completed.getHours()}:{String(completed.getMinutes()).padStart(2, '0')}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      {item.payment_method ? (
+                        <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
+                          <Text style={{ fontWeight: '800', color: '#FFF', fontSize: 10, letterSpacing: 0.5 }}>
+                            {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {km ? (
+                        <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
+                          <Feather name="map-pin" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
+                          <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{km}</Text>
+                        </View>
+                      ) : null}
+                      <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
+                        <Feather name="clock" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
+                        <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{acceptedMins} λ.</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              }}
+              ListEmptyComponent={<Text style={{color: isDarkMode ? '#AAA' : '#666', textAlign:'center', marginTop:20}}>Καμία παραγγελία σε αυτό το διάστημα.</Text>}
+            />
+          )}
         </View>
       </Modal>
 
