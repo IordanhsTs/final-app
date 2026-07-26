@@ -15,12 +15,19 @@ import DriverDashboard from './src/screens/DriverDashboard';
 // Ο ήχος παίζεται ΜΟΝΟ μέσω FCM push notification (channel orders_urgent_v3).
 // Δεν χρησιμοποιούμε expo-audio πλέον για ήχο παραγγελιών.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: false,
-    shouldShowList: false,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (notification) => {
+    // Στην ΑΝΑΘΕΣΗ με ανοιχτή εφαρμογή ο ήχος του push θα έπεφτε πάνω στον
+    // 15δευτερο in-app συναγερμό (ίδιο αρχείο, ξεκάθαρα διπλός). Το push
+    // υπάρχει για την κλειδωμένη οθόνη — σε foreground το σιωπαίνουμε.
+    const isAssignment = notification.request?.content?.data?.kind === 'assign'
+      || notification.request?.content?.data?.kind === 'reassign';
+    return {
+      shouldShowBanner: false,
+      shouldShowList: false,
+      shouldPlaySound: !isAssignment,
+      shouldSetBadge: false,
+    };
+  },
 });
 
 // ─── SINGLE-DEVICE: σταθερό αναγνωριστικό συσκευής ────────────────────────────
@@ -154,6 +161,18 @@ export default function App() {
             importance: Notifications.AndroidImportance.MAX,
             sound: 'notification.mp3',
             vibrationPattern: [0, 500, 200, 500],
+            enableVibrate: true,
+            bypassDnd: true,
+          });
+
+          // Ξεχωριστό κανάλι για την ΑΝΑΘΕΣΗ/ΜΕΤΑΘΕΣΗ: ο διανομέας μπορεί να
+          // οδηγεί με το κινητό στην τσέπη, οπότε θέλει τον δυνατό/μακρύ ήχο
+          // συναγερμού και όχι το σύντομο «νέα παραγγελία».
+          await Notifications.setNotificationChannelAsync('assignments_urgent_v1', {
+            name: 'Αναθέσεις από τον διαχειριστή',
+            importance: Notifications.AndroidImportance.MAX,
+            sound: 'alarm.mp3',
+            vibrationPattern: [0, 800, 300, 800, 300, 800],
             enableVibrate: true,
             bypassDnd: true,
           });

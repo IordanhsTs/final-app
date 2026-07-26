@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, FlatList, RefreshControl, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, ScrollView, RefreshControl, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import { formatKm, formatCountdown, orderDurations, minutesSinceCreated } from '../utils/orderInfo';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -55,6 +55,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [historyData, setHistoryData] = useState([]);
   // 'summary' = στατιστικά + ανά κατάστημα (όπως πριν) · 'detailed' = μία γραμμή ανά παραγγελία.
   const [historyView, setHistoryView] = useState('summary');
+  // Φίλτρο καταστημάτων: άδειο = ΟΛΑ. Το φιλτράρισμα γίνεται τοπικά ώστε οι
+  // επιλογές να μη χάνονται και να μη χτυπάμε τη βάση σε κάθε πάτημα.
+  const [storeFilter, setStoreFilter] = useState([]);
   
   // States για Custom Modal Επιβεβαίωσης (και για απλά ενημερωτικά μηνύματα — βλ. showAlert
   // παρακάτω· έτσι όλα τα μηνύματα προς τον χρήστη μοιράζονται το ίδιο styled modal αντί να
@@ -266,7 +269,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       .eq('status', 'completed').eq('driver_id', currentUser.id)
       .gte('completed_at', start.toISOString())
       .lte('completed_at', end.toISOString());
-    setHistoryData(data || []);
+    const rows = data || [];
+    setHistoryData(rows);
+    // Αλλάζοντας διάστημα, καταστήματα που δεν υπάρχουν πια στα δεδομένα θα
+    // έμεναν επιλεγμένα και θα έδειχναν κενή λίστα χωρίς προφανή λόγο.
+    const availableIds = new Set(rows.map(o => o.store_id));
+    setStoreFilter(prev => prev.filter(id => availableIds.has(id)));
   }
 
   async function fetchOrders() {
@@ -448,12 +456,21 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   };
 
   // Άνοιγμα πλοήγησης προς οποιαδήποτε διεύθυνση (κατάστημα ή πελάτη).
-  const openNavigation = (destination) => {
-    const full = `${destination}, ${city}, Ελλάδα`;
-    Linking.openURL(Platform.select({
-      ios: `maps:0,0?q=${full}`,
-      android: `google.navigation:q=${full}`,
-    }));
+  const openNavigation = (destination, toStore) => {
+    setConfirmConfig({
+      title: 'Πλοήγηση',
+      message: `Έναρξη πλοήγησης προς ${toStore ? 'το κατάστημα' : 'τον πελάτη'}:\n${destination}`,
+      confirmLabel: 'Πλοήγηση',
+      onConfirm: () => {
+        setConfirmModalVisible(false);
+        const full = `${destination}, ${city}, Ελλάδα`;
+        Linking.openURL(Platform.select({
+          ios: `maps:0,0?q=${full}`,
+          android: `google.navigation:q=${full}`,
+        }));
+      },
+    });
+    setConfirmModalVisible(true);
   };
 
   const renderOrderItem = ({ item }) => {
@@ -497,18 +514,21 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <Text style={{ fontWeight: '900', fontSize: 17, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
               <Ionicons name="storefront-outline" size={16} color={isDarkMode ? '#C5A066' : '#8A7347'} /> {item.store_name}
             </Text>
-          </View>
 
-          {/* Εικονίδια ενεργειών πάνω δεξιά: τηλέφωνο + ΠΛΟΗΓΗΣΗ (ίδιο ύφος) */}
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {/* Το τηλέφωνο ανήκει στο ΟΝΟΜΑ, γι' αυτό κάθεται δίπλα του και όχι
+                στη δεξιά ομάδα: κολλητά στην πλοήγηση πατιόταν κατά λάθος. */}
             {item.store_phone ? (
-              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
+              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
                 <Feather name="phone-call" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
               </TouchableOpacity>
             ) : null}
+          </View>
+
+          {/* Δεξιά ομάδα: ΠΛΟΗΓΗΣΗ + χρόνος */}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {!isScheduled && (
               <TouchableOpacity
-                onPress={() => openNavigation(navTarget)}
+                onPress={() => openNavigation(navTarget, !pickedUp && !!item.store_address)}
                 style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}
                 accessibilityLabel="Πλοήγηση"
               >
@@ -601,14 +621,33 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     );
   };
 
+  // Καταστήματα που εμφανίζονται στο επιλεγμένο διάστημα — αυτά γίνονται τα
+  // κουμπιά του φίλτρου (όχι όλα τα καταστήματα της εταιρίας).
+  const historyStores = [];
+  const seenStoreIds = new Set();
+  historyData.forEach(o => {
+    if (!o.store_id || seenStoreIds.has(o.store_id)) return;
+    seenStoreIds.add(o.store_id);
+    historyStores.push({ id: o.store_id, name: o.stores?.name || 'Άγνωστο Κατάστημα' });
+  });
+  historyStores.sort((a, b) => a.name.localeCompare(b.name, 'el'));
+
+  const filteredHistory = storeFilter.length === 0
+    ? historyData
+    : historyData.filter(o => storeFilter.includes(o.store_id));
+
+  const toggleStoreFilter = (id) =>
+    setStoreFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
   // Υπολογισμοί Στατιστικών
-  let totalOrders = historyData.length;
+  let totalOrders = filteredHistory.length;
   let totalDeliveryMins = 0; let countWithTime = 0;
   let coffeeCount = 0; let foodCount = 0;
   let totalRevenue = 0;
+  let totalKm = 0;
   let storeCounts = {};
 
-  historyData.forEach(o => {
+  filteredHistory.forEach(o => {
     if (o.accepted_at && o.completed_at) {
       totalDeliveryMins += (new Date(o.completed_at) - new Date(o.accepted_at)) / 60000;
       countWithTime++;
@@ -625,6 +664,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     }
     const sName = o.stores?.name || 'Άγνωστο Κατάστημα';
     storeCounts[sName] = (storeCounts[sName] || 0) + 1;
+    const d = parseFloat(o.distance_km);
+    if (!isNaN(d)) totalKm += d;
   });
   const avgTime = countWithTime > 0 ? (totalDeliveryMins / countWithTime).toFixed(1) : 0;
   const formattedRevenue = totalRevenue.toFixed(2);
@@ -766,6 +807,32 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <DateTimePicker value={pickerTarget === 'start' ? startDate : endDate} mode={pickerMode} is24Hour={true} display="default" onChange={handleDateChange} />
           )}
 
+          {/* Φίλτρο ανά κατάστημα — οποιοσδήποτε συνδυασμός. Καμία επιλογή = όλα. */}
+          {historyStores.length > 1 && (
+            <View style={{ marginBottom: 14 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+                <TouchableOpacity
+                  style={[styles.filterBtn, storeFilter.length === 0 && styles.filterBtnActive]}
+                  onPress={() => setStoreFilter([])}
+                >
+                  <Text style={[styles.filterBtnText, storeFilter.length === 0 && styles.filterBtnTextActive]}>Όλα</Text>
+                </TouchableOpacity>
+                {historyStores.map(s => {
+                  const on = storeFilter.includes(s.id);
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[styles.filterBtn, on && styles.filterBtnActive]}
+                      onPress={() => toggleStoreFilter(s.id)}
+                    >
+                      <Text style={[styles.filterBtnText, on && styles.filterBtnTextActive]}>{s.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
           <View style={styles.statRow}>
             <View style={[styles.statBox, { backgroundColor: isDarkMode ? '#1e3a24' : '#E8F5E9', borderColor: '#10B981' }]}><Text style={[styles.statValue, { color: '#10B981', fontSize: 28 }]}>{formattedRevenue}€</Text><Text style={styles.statLabel}>Συνολικό Κέρδος</Text></View>
           </View>
@@ -777,6 +844,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={styles.statRow}>
             <View style={styles.statBox}><Text style={[styles.statValue, {color:'#E53935'}]}>{foodCount}</Text><Text style={styles.statLabel}>Φαγητά (1.30€)</Text></View>
             <View style={styles.statBox}><Text style={[styles.statValue, {color:'#8E44AD'}]}>{coffeeCount}</Text><Text style={styles.statLabel}>Καφέδες (1.00€)</Text></View>
+          </View>
+          <View style={styles.statRow}>
+            <View style={styles.statBox}>
+              <Text style={[styles.statValue, { color: '#208AEF' }]}>{totalKm.toFixed(1)}</Text>
+              <Text style={styles.statLabel}>Συνολικά χλμ</Text>
+            </View>
           </View>
 
           <View style={[styles.filterRow, { marginTop: 10 }]}>
@@ -808,7 +881,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             />
           ) : (
             <FlatList
-              data={[...historyData].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))}
+              data={[...filteredHistory].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))}
               keyExtractor={item => item.id.toString()}
               renderItem={({ item }) => {
                 const { acceptedMins } = orderDurations(item);
@@ -826,6 +899,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                         </Text>
                       ) : null}
                     </View>
+
+                    {/* Πού πήγε η παραγγελία — όχι μόνο από πού ήρθε */}
+                    <Text style={{ fontSize: 13, color: isDarkMode ? '#C9C9C9' : '#374151', marginBottom: 6 }} numberOfLines={1}>
+                      <Feather name="corner-down-right" size={11} /> {item.address}
+                    </Text>
+
                     <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                       {item.payment_method ? (
                         <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
