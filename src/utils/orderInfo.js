@@ -26,9 +26,18 @@ export function formatCountdown(ms) {
  * το `accepted_at` το στέλνει το ρολόι του κινητού. Αν το κινητό πάει λίγα
  * δευτερόλεπτα πίσω, η διαφορά βγαίνει αρνητική και το Math.floor(-0,5) έδινε -1
  * την πρώτη στιγμή μετά την αποδοχή. Τώρα ο μετρητής ξεκινά πάντα από 0.
+ *
+ * `activated_at ?? created_at`: για μια ΚΑΘΥΣΤΕΡΗΜΕΝΗ παραγγελία το `created_at`
+ * είναι η στιγμή που το κατάστημα την έστειλε — πολύ ΠΡΙΝ γίνει 'pending'. Χωρίς
+ * αυτό το fallback, τη στιγμή της απελευθέρωσης ο χρόνος «ενεργή» θα ξεκινούσε ήδη
+ * από τα λεπτά της αναμονής αντί από το 0. Το `release_due_orders()` γεμίζει το
+ * `activated_at` ΤΗ ΣΤΙΓΜΗ scheduled→pending. Για κανονικές παραγγελίες (ποτέ
+ * scheduled) είναι null, οπότε η συμπεριφορά μένει ίδια με πριν.
  */
 export function orderDurations(order, now = new Date()) {
-  const created = order.created_at ? new Date(order.created_at) : null;
+  const created = order.activated_at
+    ? new Date(order.activated_at)
+    : order.created_at ? new Date(order.created_at) : null;
   const accepted = order.accepted_at ? new Date(order.accepted_at) : null;
   const ended = order.completed_at ? new Date(order.completed_at) : null;
   if (!created) return { activeMins: 0, acceptedMins: 0, totalMins: 0 };
@@ -42,8 +51,9 @@ export function orderDurations(order, now = new Date()) {
   return { activeMins, acceptedMins, totalMins: activeMins + acceptedMins };
 }
 
-/** Λεπτά από τη δημιουργία της παραγγελίας — ποτέ αρνητικά (βλ. παραπάνω). */
+/** Λεπτά από τη (πραγματική) ενεργοποίηση της παραγγελίας — ποτέ αρνητικά (βλ. παραπάνω). */
 export function minutesSinceCreated(order, now = new Date()) {
-  if (!order.created_at) return 0;
-  return Math.max(0, Math.floor((now - new Date(order.created_at)) / 60000));
+  const base = order.activated_at || order.created_at;
+  if (!base) return 0;
+  return Math.max(0, Math.floor((now - new Date(base)) / 60000));
 }

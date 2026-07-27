@@ -10,9 +10,19 @@ serve(async (req) => {
     const payload = await req.json()
     console.log("Webhook payload:", payload)
 
-    // Μας ενδιαφέρουν μόνο τα νέα INSERTs στον πίνακα orders με status 'pending'
-    if (payload.type !== 'INSERT' || payload.record.status !== 'pending') {
-      return new Response("Not a new pending order, ignoring.", { status: 200 })
+    // Μας ενδιαφέρουν: (α) νέα INSERTs με status 'pending' — κανονική παραγγελία,
+    // ή (β) UPDATE όπου μια ΚΑΘΥΣΤΕΡΗΜΕΝΗ παραγγελία μόλις απελευθερώθηκε
+    // (scheduled → pending, βλ. release_due_orders()). Χωρίς το (β) ο διανομέας
+    // μαθαίνει για μια προγραμματισμένη παραγγελία μόνο αν τύχει να έχει ανοιχτή
+    // την εφαρμογή τη στιγμή που ενεργοποιείται.
+    const isNewPendingOrder = payload.type === 'INSERT' && payload.record?.status === 'pending'
+    const isReleasedFromSchedule =
+      payload.type === 'UPDATE' &&
+      payload.old_record?.status === 'scheduled' &&
+      payload.record?.status === 'pending'
+
+    if (!isNewPendingOrder && !isReleasedFromSchedule) {
+      return new Response("Not a new/released pending order, ignoring.", { status: 200 })
     }
 
     const newOrder = payload.record
