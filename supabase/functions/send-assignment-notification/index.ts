@@ -95,6 +95,9 @@ serve(async (req) => {
     const tokens = await jwtClient.authorize()
 
     const isReassign = kind === 'reassign'
+    // Ο διανομέας που ΧΑΝΕΙ την παραγγελία σε μια μετάθεση — δεν έχει σχέση με το
+    // order.address σαν body, θέλει να μάθει απλώς ότι δεν είναι πια δική του.
+    const isReassignAway = kind === 'reassign_away'
 
     const res = await fetch(
       `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
@@ -108,12 +111,16 @@ serve(async (req) => {
           message: {
             token: driver.fcm_token,
             notification: {
-              title: isReassign ? '🔁 Μετάθεση παραγγελίας' : '📦 Σου ανατέθηκε παραγγελία',
-              body: order?.address || 'Άνοιξε την εφαρμογή για λεπτομέρειες.',
+              title: isReassignAway
+                ? '↩️ Η παραγγελία μεταφέρθηκε'
+                : isReassign ? '🔁 Μετάθεση παραγγελίας' : '📦 Σου ανατέθηκε παραγγελία',
+              body: isReassignAway
+                ? 'Δεν είναι πλέον δική σου — αναλαμβάνει άλλος διανομέας.'
+                : (order?.address || 'Άνοιξε την εφαρμογή για λεπτομέρειες.'),
             },
             data: {
               orderId: String(orderId),
-              kind: isReassign ? 'reassign' : 'assign',
+              kind: isReassignAway ? 'reassign_away' : (isReassign ? 'reassign' : 'assign'),
             },
             android: {
               priority: 'HIGH',

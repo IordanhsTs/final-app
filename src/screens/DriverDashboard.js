@@ -11,14 +11,20 @@ import { getStyles } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 
 const notificationSound = require('../../assets/notification.mp3');
+const alarmSound = require('../../assets/alarm.wav');
+const messageSound = require('../../assets/message.wav');
 
 
 
 export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMode, setIsDarkMode }) {
   const styles = getStyles(isDarkMode);
-  
-  // ΤΟ HOOK ΜΠΑΙΝΕΙ ΑΥΣΤΗΡΑ ΕΔΩ ΣΤΗΝ ΚΟΡΥΦΗ!
+
+  // ΤΑ HOOKS ΜΠΑΙΝΟΥΝ ΑΥΣΤΗΡΑ ΕΔΩ ΣΤΗΝ ΚΟΡΥΦΗ!
+  // Τρεις ξεχωριστοί players — ένας ανά είδος ειδοποίησης (νέα παραγγελία / ανάθεση
+  // /μετάθεση / μήνυμα κέντρου) — ο πελάτης θέλει να τους ξεχωρίζει με το αυτί.
   const player = useAudioPlayer(notificationSound);
+  const alarmPlayer = useAudioPlayer(alarmSound);
+  const messagePlayer = useAudioPlayer(messageSound);
 
   const [pendingOrders, setPendingOrders] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
@@ -153,8 +159,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         if (data.target_type === 'driver' && (targets.includes('all') || targets.includes(currentUser.id))) {
           setSystemAlert(data.message);
           // ΣΥΝΕΧΟΜΕΝΟΣ ήχος μέχρι το «Το είδα (ΟΚ)» (αίτημα πελάτη): το μήνυμα
-          // του κέντρου δεν πρέπει να περνά απαρατήρητο πάνω στη μηχανή.
-          startAlarm(0);
+          // του κέντρου δεν πρέπει να περνά απαρατήρητο πάνω στη μηχανή. Δικός
+          // του ήχος (messagePlayer), ξεχωριστός από παραγγελία/ανάθεση.
+          startAlarm(0, messagePlayer);
         }
       })
       .subscribe();
@@ -207,24 +214,27 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   function stopAlarm() {
     clearAlarmTimers();
     Vibration.cancel();
-    try {
-      if (player) {
-        player.loop = false;
-        player.pause();
-      }
-    } catch (e) { console.log('Audio Error:', e); }
+    // Σταματάμε ΚΑΙ τους τρεις players (ό,τι κι αν έπαιζε) — δεν θέλουμε κάποιος
+    // να μείνει να κάνει loop αν χτυπήσουν σχεδόν ταυτόχρονα δύο διαφορετικά events.
+    [player, alarmPlayer, messagePlayer].forEach((p) => {
+      try {
+        if (p) { p.loop = false; p.pause(); }
+      } catch (e) { console.log('Audio Error:', e); }
+    });
   }
 
-  // `autoStopMs = 0` σημαίνει «μέχρι να το σταματήσει ο χρήστης».
-  function startAlarm(autoStopMs) {
+  // `autoStopMs = 0` σημαίνει «μέχρι να το σταματήσει ο χρήστης». `targetPlayer`
+  // επιλέγει ΠΟΙΟΝ ήχο θα παίξει (η ανάθεση έχει δικό της, ξεχωριστό από το μήνυμα
+  // κέντρου / νέα παραγγελία).
+  function startAlarm(autoStopMs, targetPlayer = player) {
     clearAlarmTimers();
     Vibration.vibrate([0, 600, 400], true); // επαναλαμβανόμενη δόνηση
     try {
-      if (player) {
-        player.loop = true;
-        player.volume = 1.0;
-        player.seekTo(0);
-        player.play();
+      if (targetPlayer) {
+        targetPlayer.loop = true;
+        targetPlayer.volume = 1.0;
+        targetPlayer.seekTo(0);
+        targetPlayer.play();
       }
     } catch (e) { console.log('Audio Error:', e); }
 
@@ -311,7 +321,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         );
         if (fresh.length > 0) {
           setAssignmentAlert(fresh[0]);
-          startAlarm(ASSIGNMENT_ALARM_MS);
+          startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
         }
       }
       knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));

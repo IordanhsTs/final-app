@@ -16,15 +16,18 @@ import DriverDashboard from './src/screens/DriverDashboard';
 // Δεν χρησιμοποιούμε expo-audio πλέον για ήχο παραγγελιών.
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    // Στην ΑΝΑΘΕΣΗ με ανοιχτή εφαρμογή ο ήχος του push θα έπεφτε πάνω στον
-    // 15δευτερο in-app συναγερμό (ίδιο αρχείο, ξεκάθαρα διπλός). Το push
-    // υπάρχει για την κλειδωμένη οθόνη — σε foreground το σιωπαίνουμε.
-    const isAssignment = notification.request?.content?.data?.kind === 'assign'
-      || notification.request?.content?.data?.kind === 'reassign';
+    // Στην ΑΝΑΘΕΣΗ/ΜΕΤΑΘΕΣΗ και στο ΜΗΝΥΜΑ ΚΕΝΤΡΟΥ, με ανοιχτή εφαρμογή, ο ήχος
+    // του push θα έπεφτε πάνω στον αντίστοιχο in-app συναγερμό (realtime-driven,
+    // ίδιο αρχείο, ξεκάθαρα διπλός). Το push υπάρχει για την κλειδωμένη/κλειστή
+    // οθόνη — σε foreground το σιωπαίνουμε. Το 'reassign_away' ΔΕΝ έχει in-app
+    // ήχο αντίστοιχο (ο διανομέας απλώς χάνει μια γραμμή από τη λίστα του), οπότε
+    // παίζει πάντα κανονικά.
+    const kind = notification.request?.content?.data?.kind;
+    const hasInAppSound = kind === 'assign' || kind === 'reassign' || kind === 'message';
     return {
       shouldShowBanner: false,
       shouldShowList: false,
-      shouldPlaySound: !isAssignment,
+      shouldPlaySound: !hasInAppSound,
       shouldSetBadge: false,
     };
   },
@@ -171,8 +174,19 @@ export default function App() {
           await Notifications.setNotificationChannelAsync('assignments_urgent_v1', {
             name: 'Αναθέσεις από τον διαχειριστή',
             importance: Notifications.AndroidImportance.MAX,
-            sound: 'alarm.mp3',
+            sound: 'alarm.wav',
             vibrationPattern: [0, 800, 300, 800, 300, 800],
+            enableVibrate: true,
+            bypassDnd: true,
+          });
+
+          // Ξεχωριστό κανάλι για ΜΗΝΥΜΑΤΑ από το κέντρο ελέγχου — δικός του ήχος,
+          // ώστε ο διανομέας να ξεχωρίζει παραγγελία / ανάθεση / μήνυμα.
+          await Notifications.setNotificationChannelAsync('messages_urgent_v1', {
+            name: 'Μηνύματα από το κέντρο ελέγχου',
+            importance: Notifications.AndroidImportance.MAX,
+            sound: 'message.wav',
+            vibrationPattern: [0, 400, 200, 400],
             enableVibrate: true,
             bypassDnd: true,
           });

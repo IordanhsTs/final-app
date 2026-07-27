@@ -50,7 +50,8 @@
           "color": "#208AEF",
           "sounds": [
             "./assets/notification.mp3",
-            "./assets/alarm.mp3"
+            "./assets/alarm.wav",
+            "./assets/message.wav"
           ]
         }
       ],
