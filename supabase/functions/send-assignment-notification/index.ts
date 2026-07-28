@@ -44,6 +44,34 @@ function readClaims(jwt: string): Record<string, unknown> {
   }
 }
 
+// ── Ποιος επιτρέπεται να καλέσει ──────────────────────────────────────────────
+// ΝΕΟ μονοπάτι (multi-tenant, με auth hook): admin ΜΟΝΟ αν το `user_role` claim το
+// λέει ρητά.
+//
+// ΜΕΤΑΒΑΤΙΚΟ μονοπάτι — ΓΙΑΤΙ ΥΠΑΡΧΕΙ: ο custom_access_token_hook βάζει το
+// `user_role` μόνο για χρήστες με εγγραφή στον public.memberships, και στο
+// σημερινό production ο πίνακας είναι ΑΔΕΙΟΣ (το cutover δεν έχει γίνει). Άρα
+// κανένα JWT δεν είχε ποτέ `user_role` και ΚΑΘΕ κλήση εδώ έπεφτε σε 403 — γι'
+// αυτό δεν έφτανε ΠΟΤΕ push ανάθεσης/μετάθεσης στους διανομείς. Πέφτουμε πίσω
+// στον ΙΔΙΟ ακριβώς έλεγχο που κάνει ήδη το delivery-admin/src/App.jsx για να
+// αφήσει κάποιον να μπει στο panel: ούτε διανομέας ούτε κατάστημα = διαχειριστής.
+// Δεν χαλαρώνει τίποτα σε σχέση με σήμερα — είναι το ίδιο κριτήριο με την είσοδο.
+// Φεύγει από μόνο του μόλις γίνει το cutover, γιατί τότε υπάρχει πάντα το claim.
+async function isAdminCaller(
+  db: ReturnType<typeof createClient>,
+  claims: Record<string, unknown>,
+  email: string | undefined,
+): Promise<boolean> {
+  if (typeof claims.user_role === 'string') return claims.user_role === 'admin'
+  if (!email) return false
+
+  const [{ data: asDriver }, { data: asStore }] = await Promise.all([
+    db.from('drivers').select('id').eq('email', email).maybeSingle(),
+    db.from('stores').select('id').eq('email', email).maybeSingle(),
+  ])
+  return !asDriver && !asStore
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
@@ -62,16 +90,17 @@ serve(async (req) => {
     if (authError || !user) return json({ error: 'unauthorized' }, 401)
 
     const claims = readClaims(jwt)
-    if (claims.user_role !== 'admin') return json({ error: 'forbidden' }, 403)
 
     // Το schema έρχεται από το ΥΠΟΓΕΓΡΑΜΜΕΝΟ token, όχι από το body: αλλιώς ένας
     // admin της μιας εταιρίας θα μπορούσε να ρωτήσει τους διανομείς μιας άλλης.
     const schema = typeof claims.tenant === 'string' && claims.tenant ? claims.tenant : 'public'
 
+    const db = createClient(supabaseUrl, serviceKey, { db: { schema } })
+
+    if (!(await isAdminCaller(db, claims, user.email))) return json({ error: 'forbidden' }, 403)
+
     const { orderId, driverId, kind } = await req.json()
     if (!orderId || !driverId) return json({ error: 'orderId and driverId are required' }, 400)
-
-    const db = createClient(supabaseUrl, serviceKey, { db: { schema } })
 
     const { data: driver } = await db
       .from('drivers')

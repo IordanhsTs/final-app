@@ -33,6 +33,26 @@ function readClaims(jwt: string): Record<string, unknown> {
   }
 }
 
+// Ίδιος έλεγχος με τη send-assignment-notification — δες εκεί το αναλυτικό γιατί.
+// Περίληψη: ο auth hook βάζει `user_role` μόνο για χρήστες με membership, και στο
+// σημερινό production ο πίνακας memberships είναι ΑΔΕΙΟΣ, οπότε ο σκέτος έλεγχος
+// του claim έριχνε ΚΑΘΕ κλήση σε 403 — δηλαδή κανένα μήνυμα δεν έφτανε ποτέ ως
+// push, και η αποτυχία περνούσε απαρατήρητη γιατί το Messages.jsx την κατάπινε.
+async function isAdminCaller(
+  db: ReturnType<typeof createClient>,
+  claims: Record<string, unknown>,
+  email: string | undefined,
+): Promise<boolean> {
+  if (typeof claims.user_role === 'string') return claims.user_role === 'admin'
+  if (!email) return false
+
+  const [{ data: asDriver }, { data: asStore }] = await Promise.all([
+    db.from('drivers').select('id').eq('email', email).maybeSingle(),
+    db.from('stores').select('id').eq('email', email).maybeSingle(),
+  ])
+  return !asDriver && !asStore
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
@@ -50,16 +70,17 @@ serve(async (req) => {
     if (authError || !user) return json({ error: 'unauthorized' }, 401)
 
     const claims = readClaims(jwt)
-    if (claims.user_role !== 'admin') return json({ error: 'forbidden' }, 403)
 
     const schema = typeof claims.tenant === 'string' && claims.tenant ? claims.tenant : 'public'
+
+    const db = createClient(supabaseUrl, serviceKey, { db: { schema } })
+
+    if (!(await isAdminCaller(db, claims, user.email))) return json({ error: 'forbidden' }, 403)
 
     const { targetIds, message } = await req.json()
     if (!Array.isArray(targetIds) || targetIds.length === 0 || !message) {
       return json({ error: 'targetIds (array) and message are required' }, 400)
     }
-
-    const db = createClient(supabaseUrl, serviceKey, { db: { schema } })
 
     let query = db.from('drivers').select('fcm_token').not('fcm_token', 'is', null)
     if (!targetIds.includes('all')) query = query.in('id', targetIds)
