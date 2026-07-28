@@ -30,6 +30,28 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║ ΠΡΟΣΩΡΙΝΟ — ΝΑ ΓΙΝΕΙ 'assignments_urgent_v3' ΜΟΛΙΣ ΜΠΕΙ ΤΟ ΝΕΟ APK       ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+// Το App.js δημιουργεί ΗΔΗ το `assignments_urgent_v3` (ήχος 19,4" + δόνηση
+// 19,2"), αλλά μόνο στο build που περιμένει ακόμα στην ουρά του EAS. Στα κινητά
+// που είναι σήμερα εγκατεστημένα υπάρχει το `_v2` — επιβεβαιωμένο από τον
+// πελάτη: στις «Κατηγορίες ειδοποιήσεων» φαίνεται «Αναθέσεις από τον
+// διαχειριστή» με «Ήχος από εφαρμογή» και ενεργή δόνηση.
+//
+// Στέλνοντας `_v3` σε αυτά τα κινητά, το Firebase δεν βρίσκει το κανάλι και
+// ρίχνει την ειδοποίηση στο δικό του εφεδρικό «Miscellaneous» με γενικό ήχο —
+// ΑΚΡΙΒΩΣ αυτό είδε ο πελάτης, και η κατηγορία «Miscellaneous» εμφανίστηκε στη
+// λίστα του ως απόδειξη.
+//
+// Μέχρι να βγει το build, δείχνουμε στο `_v2`: σωστός ήχος + δόνηση με
+// κλειδωμένο κινητό, απλώς 2,16" αντί για 20". Καλύτερο από γενικό μπιπ.
+//
+// ⚠️ Το νέο APK ΣΒΗΝΕΙ το `_v2` στην πρώτη εκκίνηση. Αν μείνει αυτή η τιμή μετά
+// την εγκατάσταση, οι αναθέσεις ξαναπέφτουν στο «Miscellaneous». Η αλλαγή σε
+// `_v3` και το deploy πρέπει να γίνουν ΤΗΝ ΙΔΙΑ ΣΤΙΓΜΗ με την εγκατάσταση.
+const ASSIGNMENT_CHANNEL = 'assignments_urgent_v2'
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } })
 
@@ -141,7 +163,7 @@ serve(async (req) => {
     // Πρακτικό όφελος: το messages_urgent_v1 υπάρχει ήδη στις εγκατεστημένες
     // συσκευές, οπότε αυτά τα δύο δουλεύουν ΧΩΡΙΣ να περιμένουμε νέο build.
     const isInfo = isReassignAway || isCancel
-    const channelId = isInfo ? 'messages_urgent_v1' : 'assignments_urgent_v3'
+    const channelId = isInfo ? 'messages_urgent_v1' : ASSIGNMENT_CHANNEL
     const soundName = isInfo ? 'message' : 'assignment'
 
     let title: string
