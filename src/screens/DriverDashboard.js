@@ -11,7 +11,7 @@ import { getStyles } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 
 const notificationSound = require('../../assets/notification.mp3');
-const alarmSound = require('../../assets/alarm.wav');
+const alarmSound = require('../../assets/assignment.wav');
 const messageSound = require('../../assets/message.wav');
 
 
@@ -43,6 +43,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const knownMyOrderIds = useRef(null);
   // Παραγγελίες που πάτησε ΜΟΝΟΣ του «Αποδοχή»: δεν πρέπει να χτυπήσει συναγερμός.
   const selfAcceptedIds = useRef(new Set());
+  // Αναθέσεις που έφτασαν ως PUSH με την εφαρμογή κλειστή/στο background. Με κλειστή
+  // εφαρμογή ο ήχος του OS παίζει ΜΙΑ φορά και ο 15δευτερος συναγερμός δεν προλαβαίνει
+  // να χτυπήσει ποτέ (στο πρώτο fetch το knownMyOrderIds είναι null, οπότε σκόπιμα δεν
+  // ηχεί για να μη «ξυπνήσει» σε κάθε άνοιγμα). Κρατάμε λοιπόν ποιες ήρθαν με push,
+  // ώστε να μετρήσουν ως ΝΕΕΣ μόλις ανοίξει η εφαρμογή και να χτυπήσει κανονικά.
+  const assignedByPushIds = useRef(new Set());
   const alarmTimers = useRef([]);
   // Ποιες ήταν προγραμματισμένες στο τελευταίο fetch. Χρειάζεται ως ref (και όχι
   // state) γιατί το διαβάζει ο realtime handler, που ζει σε effect με άδειο
@@ -110,13 +116,27 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
 
 
+    // Μια ανάθεση/μετάθεση που ήρθε ως push πρέπει να χτυπήσει τον κανονικό
+    // 15δευτερο συναγερμό μόλις ανοίξει η εφαρμογή — αλλιώς, με κλειστό κινητό,
+    // ακούγεται μόνο το ένα «μπιπ» του OS και μπορεί να χαθεί εντελώς.
+    const rememberAssignmentPush = (notification) => {
+      const data = notification?.request?.content?.data;
+      if (!data) return;
+      if ((data.kind === 'assign' || data.kind === 'reassign') && data.orderId) {
+        assignedByPushIds.current.add(String(data.orderId));
+      }
+    };
+
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
+      rememberAssignmentPush(notification);
       fetchOrders();
     });
 
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
-      fetchOrders(); // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background
+      // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background
+      rememberAssignmentPush(response?.notification);
+      fetchOrders();
     });
 
     // Απελευθέρωση των προγραμματισμένων που έφτασε η ώρα τους ('scheduled' →
@@ -315,14 +335,19 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       // ── Ανίχνευση ΝΕΑΣ ανάθεσης από τον διαχειριστή ──
       // Νέα παραγγελία στη λίστα μου που ΔΕΝ την πάτησα εγώ = μου την ανέθεσε ή
       // μου τη μετέθεσε ο διαχειριστής → δυνατός επαναλαμβανόμενος συναγερμός.
-      if (knownMyOrderIds.current !== null) {
-        const fresh = mineMapped.filter(
-          o => !knownMyOrderIds.current.has(o.id) && !selfAcceptedIds.current.has(o.id)
-        );
-        if (fresh.length > 0) {
-          setAssignmentAlert(fresh[0]);
-          startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
-        }
+      // Δύο δρόμοι να θεωρηθεί «νέα»:
+      //   • ήρθε ως push όσο ήμασταν κλειστοί (assignedByPushIds) — ισχύει ΚΑΙ στο
+      //     πρώτο fetch, γι' αυτό ελέγχεται έξω από το knownMyOrderIds guard·
+      //   • εμφανίστηκε στη λίστα ενώ η εφαρμογή ήταν ήδη ανοιχτή.
+      const fresh = mineMapped.filter((o) => {
+        if (selfAcceptedIds.current.has(o.id)) return false;
+        if (assignedByPushIds.current.has(String(o.id))) return true;
+        return knownMyOrderIds.current !== null && !knownMyOrderIds.current.has(o.id);
+      });
+      if (fresh.length > 0) {
+        fresh.forEach(o => assignedByPushIds.current.delete(String(o.id)));
+        setAssignmentAlert(fresh[0]);
+        startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
       }
       knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));
 

@@ -171,10 +171,19 @@ export default function App() {
           // Ξεχωριστό κανάλι για την ΑΝΑΘΕΣΗ/ΜΕΤΑΘΕΣΗ: ο διανομέας μπορεί να
           // οδηγεί με το κινητό στην τσέπη, οπότε θέλει τον δυνατό/μακρύ ήχο
           // συναγερμού και όχι το σύντομο «νέα παραγγελία».
-          await Notifications.setNotificationChannelAsync('assignments_urgent_v1', {
+          //
+          // ΠΡΟΣΟΧΗ — ΓΙΑΤΙ «_v2»: οι ρυθμίσεις ενός καναλιού (ΚΑΙ ο ήχος) είναι
+          // ΑΜΕΤΑΒΛΗΤΕΣ στο Android μετά την πρώτη δημιουργία σε κάθε συσκευή. Το
+          // «_v1» είχε δημιουργηθεί από παλιότερο build με άλλο αρχείο ήχου· όταν
+          // άλλαξαν τα αρχεία, η αποθηκευμένη αναφορά του έδειχνε πλέον σε ΛΑΘΟΣ
+          // resource (ακουγόταν ο ήχος νέας παραγγελίας). Αλλάζοντας ήχο εδώ ΔΕΝ
+          // διορθώνεται — πρέπει ΝΕΟ channel id. Αν ξανααλλάξει το αρχείο ήχου,
+          // ανέβασε ΚΑΙ την έκδοση (_v3) και σβήσε την προηγούμενη παρακάτω.
+          await Notifications.deleteNotificationChannelAsync('assignments_urgent_v1').catch(() => {});
+          await Notifications.setNotificationChannelAsync('assignments_urgent_v2', {
             name: 'Αναθέσεις από τον διαχειριστή',
             importance: Notifications.AndroidImportance.MAX,
-            sound: 'alarm.wav',
+            sound: 'assignment.wav',
             vibrationPattern: [0, 800, 300, 800, 300, 800],
             enableVibrate: true,
             bypassDnd: true,

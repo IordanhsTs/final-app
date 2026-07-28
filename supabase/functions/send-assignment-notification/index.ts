@@ -126,8 +126,12 @@ serve(async (req) => {
               priority: 'HIGH',
               ttl: '600s',
               notification: {
-                channel_id: 'assignments_urgent_v1',
-                sound: 'alarm',
+                // ΠΡΟΣΟΧΗ: το channel id ΠΡΕΠΕΙ να είναι ίδιο με το App.js. Τα κανάλια
+                // είναι αμετάβλητα στο Android μετά την 1η δημιουργία, οπότε κάθε αλλαγή
+                // αρχείου ήχου απαιτεί ΝΕΟ id (_v2, _v3, …) — αλλιώς το κινητό κρατά τον
+                // παλιό/λάθος ήχο. Άλλαξε ΚΑΙ ΤΑ ΔΥΟ μαζί.
+                channel_id: 'assignments_urgent_v2',
+                sound: 'assignment',
               },
             },
           },
