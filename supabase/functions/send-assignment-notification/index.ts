@@ -170,8 +170,28 @@ serve(async (req) => {
 
     if (!res.ok) {
       const detail = await res.text()
-      console.error('FCM API error:', detail)
-      return json({ error: 'fcm failed', detail }, 502)
+      console.error('FCM API error:', res.status, detail)
+
+      // Το FCM απαντά UNREGISTERED / INVALID_ARGUMENT όταν το token δεν ισχύει
+      // πια — τυπικά μετά από επανεγκατάσταση ή καθαρισμό δεδομένων της
+      // εφαρμογής, που παράγει ΝΕΟ token. Το παλιό μένει στη βάση μέχρι ο
+      // διανομέας να ξαναμπεί στην εφαρμογή, και κάθε ανάθεση στο μεταξύ σκάει
+      // εδώ. Το σβήνουμε ώστε οι επόμενες να μη χτυπάνε στο κενό (και να
+      // βγάζουν το σαφές «δεν έχει ενεργές ειδοποιήσεις» αντί για σφάλμα).
+      const stale = /UNREGISTERED|INVALID_ARGUMENT|NOT_FOUND|registration-token-not-registered/i.test(detail)
+      if (stale) {
+        await db.from('drivers').update({ fcm_token: null }).eq('id', driverId)
+      }
+
+      return json({
+        error: 'fcm failed',
+        // Ελληνικό, εκτελέσιμο μήνυμα: ο διαχειριστής πρέπει να ξέρει ΤΙ να κάνει,
+        // όχι ότι «κάτι απέτυχε».
+        reason: stale
+          ? 'Το κινητό του διανομέα δεν είναι πλέον καταχωρημένο για ειδοποιήσεις (συμβαίνει μετά από επανεγκατάσταση της εφαρμογής). Πρέπει να ανοίξει την εφαρμογή και να ξανασυνδεθεί μία φορά.'
+          : `Το Firebase απέρριψε την ειδοποίηση (κωδικός ${res.status}).`,
+        detail,
+      }, 502)
     }
 
     return json({ success: true })

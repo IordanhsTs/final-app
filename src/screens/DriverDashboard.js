@@ -117,8 +117,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
 
     // Μια ανάθεση/μετάθεση που ήρθε ως push πρέπει να χτυπήσει τον κανονικό
-    // 15δευτερο συναγερμό μόλις ανοίξει η εφαρμογή — αλλιώς, με κλειστό κινητό,
-    // ακούγεται μόνο το ένα «μπιπ» του OS και μπορεί να χαθεί εντελώς.
+    // 20δευτερο συναγερμό μόλις ανοίξει η εφαρμογή. Τα 'reassign_away'/'cancel'
+    // ΔΕΝ μπαίνουν εδώ επίτηδες: η παραγγελία φεύγει από τη λίστα του, δεν έρχεται
+    // — δεν έχει νόημα να τον υποδεχτεί συναγερμός ανάθεσης όταν ανοίξει.
     const rememberAssignmentPush = (notification) => {
       const data = notification?.request?.content?.data;
       if (!data) return;
