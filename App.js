@@ -18,16 +18,18 @@ Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
     // Στην ΑΝΑΘΕΣΗ/ΜΕΤΑΘΕΣΗ και στο ΜΗΝΥΜΑ ΚΕΝΤΡΟΥ, με ανοιχτή εφαρμογή, ο ήχος
     // του push θα έπεφτε πάνω στον αντίστοιχο in-app συναγερμό (realtime-driven,
-    // ίδιο αρχείο, ξεκάθαρα διπλός). Το push υπάρχει για την κλειδωμένη/κλειστή
-    // οθόνη — σε foreground το σιωπαίνουμε. Το 'reassign_away' ΔΕΝ έχει in-app
-    // ήχο αντίστοιχο (ο διανομέας απλώς χάνει μια γραμμή από τη λίστα του), οπότε
-    // παίζει πάντα κανονικά.
+    // ίδιο αρχείο, ξεκάθαρα διπλός) — και το banner πάνω στο in-app modal. Το push
+    // υπάρχει για την κλειδωμένη/κλειστή οθόνη· σε foreground το σιωπαίνουμε.
+    //
+    // Τα 'reassign_away' και 'cancel' ΔΕΝ έχουν in-app αντίστοιχο: ο διανομέας
+    // απλώς βλέπει μια γραμμή να εξαφανίζεται από τη λίστα του, χωρίς εξήγηση.
+    // Γι' αυτά κρατάμε ΚΑΙ ήχο ΚΑΙ banner — αλλιώς δεν θα μάθει ποτέ τον λόγο.
     const kind = notification.request?.content?.data?.kind;
-    const hasInAppSound = kind === 'assign' || kind === 'reassign' || kind === 'message';
+    const hasInAppUi = kind === 'assign' || kind === 'reassign' || kind === 'message';
     return {
-      shouldShowBanner: false,
-      shouldShowList: false,
-      shouldPlaySound: !hasInAppSound,
+      shouldShowBanner: !hasInAppUi,
+      shouldShowList: !hasInAppUi,
+      shouldPlaySound: !hasInAppUi,
       shouldSetBadge: false,
     };
   },
@@ -172,19 +174,29 @@ export default function App() {
           // οδηγεί με το κινητό στην τσέπη, οπότε θέλει τον δυνατό/μακρύ ήχο
           // συναγερμού και όχι το σύντομο «νέα παραγγελία».
           //
-          // ΠΡΟΣΟΧΗ — ΓΙΑΤΙ «_v2»: οι ρυθμίσεις ενός καναλιού (ΚΑΙ ο ήχος) είναι
-          // ΑΜΕΤΑΒΛΗΤΕΣ στο Android μετά την πρώτη δημιουργία σε κάθε συσκευή. Το
-          // «_v1» είχε δημιουργηθεί από παλιότερο build με άλλο αρχείο ήχου· όταν
-          // άλλαξαν τα αρχεία, η αποθηκευμένη αναφορά του έδειχνε πλέον σε ΛΑΘΟΣ
-          // resource (ακουγόταν ο ήχος νέας παραγγελίας). Αλλάζοντας ήχο εδώ ΔΕΝ
-          // διορθώνεται — πρέπει ΝΕΟ channel id. Αν ξανααλλάξει το αρχείο ήχου,
-          // ανέβασε ΚΑΙ την έκδοση (_v3) και σβήσε την προηγούμενη παρακάτω.
+          // ΓΙΑΤΙ Ο ΗΧΟΣ ΕΙΝΑΙ 20": με ΚΛΕΙΣΤΗ εφαρμογή τον ήχο τον παίζει το ίδιο
+          // το Android από το κανάλι, ΜΙΑ ΦΟΡΑ και όσο κρατάει το αρχείο — δεν
+          // υπάρχει ρύθμιση «επανάλαβε» ή «διάρκεια». Ο 20δευτερος συναγερμός του
+          // DriverDashboard είναι in-app (expo-audio loop) και δεν μπορεί να τρέξει
+          // χωρίς ανοιχτή εφαρμογή. Άρα ο ΜΟΝΟΣ τρόπος να χτυπήσει 20" με κλειστή
+          // εφαρμογή είναι το ίδιο το αρχείο να διαρκεί 20" — γι' αυτό το
+          // assignment.wav είναι ο ήχος σε 9 συνεχόμενους κύκλους (19,4").
+          //
+          // ΠΡΟΣΟΧΗ — ΓΙΑΤΙ «_v3»: οι ρυθμίσεις ενός καναλιού (ΚΑΙ ο ήχος) είναι
+          // ΑΜΕΤΑΒΛΗΤΕΣ στο Android μετά την πρώτη δημιουργία σε κάθε συσκευή.
+          // Αλλάζοντας ήχο εδώ ΔΕΝ διορθώνεται τίποτα σε ήδη εγκατεστημένη
+          // εφαρμογή — πρέπει ΝΕΟ channel id, μαζί με το channel_id της
+          // send-assignment-notification. Σβήνουμε ΚΑΙ τα δύο προηγούμενα: το _v1
+          // μπορεί να έχει μείνει σε συσκευή που δεν πρόλαβε ποτέ το _v2.
           await Notifications.deleteNotificationChannelAsync('assignments_urgent_v1').catch(() => {});
-          await Notifications.setNotificationChannelAsync('assignments_urgent_v2', {
+          await Notifications.deleteNotificationChannelAsync('assignments_urgent_v2').catch(() => {});
+          await Notifications.setNotificationChannelAsync('assignments_urgent_v3', {
             name: 'Αναθέσεις από τον διαχειριστή',
             importance: Notifications.AndroidImportance.MAX,
             sound: 'assignment.wav',
-            vibrationPattern: [0, 800, 300, 800, 300, 800],
+            // Το μοτίβο δόνησης παίζει κι αυτό ΜΙΑ φορά, οπότε το γράφουμε ολόκληρο:
+            // 16 × (800ms δόνηση + 400ms παύση) = 19,2" — όσο διαρκεί κι ο ήχος.
+            vibrationPattern: [0, ...Array.from({ length: 16 }, () => [800, 400]).flat()],
             enableVibrate: true,
             bypassDnd: true,
           });

@@ -1,8 +1,12 @@
 // ════════════════════════════════════════════════════════════════════════════
 // send-assignment-notification
 //
-// Push στον ΣΥΓΚΕΚΡΙΜΕΝΟ διανομέα όταν ο διαχειριστής του αναθέτει ή του
-// μεταθέτει παραγγελία.
+// Push στον ΣΥΓΚΕΚΡΙΜΕΝΟ διανομέα για ό,τι κάνει ο διαχειριστής στη δική του
+// παραγγελία. Τέσσερα είδη (`kind`):
+//   assign        → του ανατέθηκε παραγγελία            (συναγερμός 20")
+//   reassign      → του μετατέθηκε παραγγελία           (συναγερμός 20")
+//   reassign_away → του ΠΗΡΑΝ την παραγγελία            (ήχος μηνύματος)
+//   cancel        → ακυρώθηκε παραγγελία που είχε δεχτεί (ήχος μηνύματος)
 //
 // ΓΙΑΤΙ ΞΕΧΩΡΙΣΤΗ FUNCTION και όχι επέκταση της send-order-notification:
 // εκείνη τρέφεται από Database Webhook σε INSERT και στέλνει σε ΟΛΟΥΣ τους
@@ -98,6 +102,36 @@ serve(async (req) => {
     // Ο διανομέας που ΧΑΝΕΙ την παραγγελία σε μια μετάθεση — δεν έχει σχέση με το
     // order.address σαν body, θέλει να μάθει απλώς ότι δεν είναι πια δική του.
     const isReassignAway = kind === 'reassign_away'
+    // Ακύρωση από τον διαχειριστή ΕΝΩ η παραγγελία ήταν ήδη αποδεκτή: ο διανομέας
+    // μπορεί να είναι ήδη καθ' οδόν προς το κατάστημα.
+    const isCancel = kind === 'cancel'
+
+    // ΠΟΙΟ ΚΑΝΑΛΙ: ο 20δευτερος συναγερμός είναι για «έχεις δουλειά ΤΩΡΑ» — ισχύει
+    // μόνο για ανάθεση/μετάθεση ΠΡΟΣ τον διανομέα. Η απώλεια παραγγελίας και η
+    // ακύρωση είναι ΠΛΗΡΟΦΟΡΙΑ: πάνε στο κανάλι μηνυμάτων, με τον σύντομο ήχο του.
+    // Πρακτικό όφελος: το messages_urgent_v1 υπάρχει ήδη στις εγκατεστημένες
+    // συσκευές, οπότε αυτά τα δύο δουλεύουν ΧΩΡΙΣ να περιμένουμε νέο build.
+    const isInfo = isReassignAway || isCancel
+    const channelId = isInfo ? 'messages_urgent_v1' : 'assignments_urgent_v3'
+    const soundName = isInfo ? 'message' : 'assignment'
+
+    let title: string
+    let body: string
+    if (isCancel) {
+      title = '❌ Ακύρωση παραγγελίας'
+      body = order?.address
+        ? `Ο διαχειριστής ακύρωσε την παραγγελία: ${order.address}`
+        : 'Ο διαχειριστής ακύρωσε την παραγγελία σου.'
+    } else if (isReassignAway) {
+      title = '↩️ Η παραγγελία μεταφέρθηκε'
+      body = 'Ο διαχειριστής μετέθεσε την παραγγελία σου σε άλλον διανομέα.'
+    } else if (isReassign) {
+      title = '🔁 Μετάθεση παραγγελίας'
+      body = order?.address || 'Άνοιξε την εφαρμογή για λεπτομέρειες.'
+    } else {
+      title = '📦 Σου ανατέθηκε παραγγελία'
+      body = order?.address || 'Άνοιξε την εφαρμογή για λεπτομέρειες.'
+    }
 
     const res = await fetch(
       `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
@@ -110,28 +144,23 @@ serve(async (req) => {
         body: JSON.stringify({
           message: {
             token: driver.fcm_token,
-            notification: {
-              title: isReassignAway
-                ? '↩️ Η παραγγελία μεταφέρθηκε'
-                : isReassign ? '🔁 Μετάθεση παραγγελίας' : '📦 Σου ανατέθηκε παραγγελία',
-              body: isReassignAway
-                ? 'Δεν είναι πλέον δική σου — αναλαμβάνει άλλος διανομέας.'
-                : (order?.address || 'Άνοιξε την εφαρμογή για λεπτομέρειες.'),
-            },
+            notification: { title, body },
             data: {
               orderId: String(orderId),
-              kind: isReassignAway ? 'reassign_away' : (isReassign ? 'reassign' : 'assign'),
+              kind: isCancel
+                ? 'cancel'
+                : isReassignAway ? 'reassign_away' : (isReassign ? 'reassign' : 'assign'),
             },
             android: {
               priority: 'HIGH',
               ttl: '600s',
               notification: {
-                // ΠΡΟΣΟΧΗ: το channel id ΠΡΕΠΕΙ να είναι ίδιο με το App.js. Τα κανάλια
+                // ΠΡΟΣΟΧΗ: τα channel id ΠΡΕΠΕΙ να είναι ίδια με το App.js. Τα κανάλια
                 // είναι αμετάβλητα στο Android μετά την 1η δημιουργία, οπότε κάθε αλλαγή
                 // αρχείου ήχου απαιτεί ΝΕΟ id (_v2, _v3, …) — αλλιώς το κινητό κρατά τον
                 // παλιό/λάθος ήχο. Άλλαξε ΚΑΙ ΤΑ ΔΥΟ μαζί.
-                channel_id: 'assignments_urgent_v2',
-                sound: 'assignment',
+                channel_id: channelId,
+                sound: soundName,
               },
             },
           },
