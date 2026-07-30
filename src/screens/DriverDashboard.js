@@ -316,9 +316,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     try {
       // Η διεύθυνση του καταστήματος μπαίνει στην κάρτα (μικρά γράμματα, κάτω):
       // ο διανομέας θέλει να ξέρει ΑΠΟ ΠΟΥ παραλαμβάνει, όχι μόνο το όνομα.
-      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address');
+      // latitude/longitude: για ΠΛΟΗΓΗΣΗ ΣΕ ΣΥΝΤΕΤΑΓΜΕΝΕΣ (βλ. openNavigation).
+      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address, latitude, longitude');
       const storesMap = {};
-      if (storesList) storesList.forEach(s => { storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address }; });
+      if (storesList) storesList.forEach(s => {
+        storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address, latitude: s.latitude, longitude: s.longitude };
+      });
 
       // ΠΑΛΙΟΤΕΡΕΣ ΠΡΩΤΑ (ascending): η παραγγελία που περιμένει περισσότερο πρέπει
       // να είναι στην κορυφή — αλλιώς μια αργοπορημένη «θάβεται» από τις νέες.
@@ -332,6 +335,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         store_name: storesMap[order.store_id]?.name || 'Κεντρικό Κατάστημα',
         store_phone: storesMap[order.store_id]?.phone || null,
         store_address: storesMap[order.store_id]?.address || null,
+        store_latitude: storesMap[order.store_id]?.latitude ?? null,
+        store_longitude: storesMap[order.store_id]?.longitude ?? null,
       }));
 
       const mineMapped = withStore(mine);
@@ -495,18 +500,33 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   };
 
   // Άνοιγμα πλοήγησης προς οποιαδήποτε διεύθυνση (κατάστημα ή πελάτη).
-  const openNavigation = (destination, toStore) => {
+  //
+  // ΣΥΝΤΕΤΑΓΜΕΝΕΣ ΠΡΩΤΑ (30/07/2026). Πριν, στέλναμε ΜΟΝΟ κείμενο και το Google
+  // Maps το γεωκωδικοποιούσε από την αρχή — αγνοώντας το σημείο που είχε ήδη
+  // υπολογίσει η εφαρμογή και πάνω στο οποίο ΧΡΕΩΘΗΚΕ η παραγγελία. Δύο συνέπειες:
+  //   • ο διανομέας μπορούσε να οδηγηθεί αλλού από εκεί που μετρήθηκε η απόσταση
+  //   • διευθύνσεις-καταστήματα («Coffee Train, 7ης Νοεμβρίου») δεν βρίσκονταν
+  //     καθόλου, γιατί ως ελεύθερο κείμενο δεν αντιστοιχούν σε διεύθυνση
+  // Με συντεταγμένες η πλοήγηση δείχνει ΑΚΡΙΒΩΣ το σημείο της χρέωσης.
+  // Το κείμενο μένει ως fallback για παλιές παραγγελίες χωρίς lat/lon.
+  const openNavigation = (destination, toStore, lat, lon) => {
+    const hasCoords = typeof lat === 'number' && typeof lon === 'number';
     setConfirmConfig({
       title: 'Πλοήγηση',
       message: `Έναρξη πλοήγησης προς ${toStore ? 'το κατάστημα' : 'τον πελάτη'}:\n${destination}`,
       confirmLabel: 'Πλοήγηση',
       onConfirm: () => {
         setConfirmModalVisible(false);
-        const full = `${destination}, ${city}, Ελλάδα`;
-        Linking.openURL(Platform.select({
-          ios: `maps:0,0?q=${full}`,
-          android: `google.navigation:q=${full}`,
-        }));
+        const url = hasCoords
+          ? Platform.select({
+              ios: `maps:0,0?q=${encodeURIComponent(destination)}@${lat},${lon}`,
+              android: `google.navigation:q=${lat},${lon}`,
+            })
+          : Platform.select({
+              ios: `maps:0,0?q=${encodeURIComponent(`${destination}, ${city}, Ελλάδα`)}`,
+              android: `google.navigation:q=${encodeURIComponent(`${destination}, ${city}, Ελλάδα`)}`,
+            });
+        Linking.openURL(url);
       },
     });
     setConfirmModalVisible(true);
@@ -530,7 +550,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     // Πριν την παραλαβή πλοηγούμαστε στο ΚΑΤΑΣΤΗΜΑ, μετά στον ΠΕΛΑΤΗ.
     const pickedUp = !!item.picked_up_at;
-    const navTarget = !pickedUp && item.store_address ? item.store_address : item.address;
+    const toStore = !pickedUp && !!item.store_address;
+    const navTarget = toStore ? item.store_address : item.address;
+    // Οι συντεταγμένες του ΙΔΙΟΥ προορισμού με το navTarget — αλλιώς θα
+    // πλοηγούσαμε στον πελάτη ενώ δείχνουμε τη διεύθυνση του καταστήματος.
+    const navLat = toStore ? item.store_latitude : item.latitude;
+    const navLon = toStore ? item.store_longitude : item.longitude;
 
     // Χρώματα χρόνου: Πράσινο μέχρι 9 λεπτά, Κόκκινο από 10 και πάνω. Ολοκληρωμένες πάντα πράσινες.
     const isWarning = !isCompleted && !isScheduled && mins > 9;
@@ -567,7 +592,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {!isScheduled && (
               <TouchableOpacity
-                onPress={() => openNavigation(navTarget, !pickedUp && !!item.store_address)}
+                onPress={() => openNavigation(navTarget, toStore, navLat, navLon)}
                 style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}
                 accessibilityLabel="Πλοήγηση"
               >
