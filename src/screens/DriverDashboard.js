@@ -49,6 +49,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // ηχεί για να μη «ξυπνήσει» σε κάθε άνοιγμα). Κρατάμε λοιπόν ποιες ήρθαν με push,
   // ώστε να μετρήσουν ως ΝΕΕΣ μόλις ανοίξει η εφαρμογή και να χτυπήσει κανονικά.
   const assignedByPushIds = useRef(new Set());
+  // Ποιες από αυτές ΕΧΟΥΝ ΗΔΗ ΗΧΗΣΕΙ στη συσκευή μέσω του push (κανάλι Android).
+  // Χωρίς αυτό, ο in-app συναγερμός ξεκινούσε ΠΑΝΩ στον ήχο του push που έπαιζε
+  // ακόμα — ο διανομέας άκουγε τον ίδιο 20δευτερο ήχο δύο φορές παράλληλα μόλις
+  // άνοιγε το κινητό (αναφορά πελάτη 30/07/2026).
+  const pushAlreadySoundedIds = useRef(new Set());
   const alarmTimers = useRef([]);
   // Ποιες ήταν προγραμματισμένες στο τελευταίο fetch. Χρειάζεται ως ref (και όχι
   // state) γιατί το διαβάζει ο realtime handler, που ζει σε effect με άδειο
@@ -120,23 +125,29 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     // 20δευτερο συναγερμό μόλις ανοίξει η εφαρμογή. Τα 'reassign_away'/'cancel'
     // ΔΕΝ μπαίνουν εδώ επίτηδες: η παραγγελία φεύγει από τη λίστα του, δεν έρχεται
     // — δεν έχει νόημα να τον υποδεχτεί συναγερμός ανάθεσης όταν ανοίξει.
-    const rememberAssignmentPush = (notification) => {
+    // `alreadySounded`: το push ΕΚΑΝΕ ήδη θόρυβο στη συσκευή. Καθορίζει αν ο
+    // in-app συναγερμός θα ξαναχτυπήσει ή θα μείνει σιωπηλός (βλ. fetchOrders).
+    const rememberAssignmentPush = (notification, alreadySounded) => {
       const data = notification?.request?.content?.data;
       if (!data) return;
       if ((data.kind === 'assign' || data.kind === 'reassign') && data.orderId) {
         assignedByPushIds.current.add(String(data.orderId));
+        if (alreadySounded) pushAlreadySoundedIds.current.add(String(data.orderId));
       }
     };
 
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
-      rememberAssignmentPush(notification);
+      // FOREGROUND: ο handler του App.js επιστρέφει shouldPlaySound:false για
+      // assign/reassign, άρα το push ΔΕΝ ήχησε — ο in-app συναγερμός πρέπει.
+      rememberAssignmentPush(notification, false);
       fetchOrders();
     });
 
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
-      // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background
-      rememberAssignmentPush(response?.notification);
+      // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background:
+      // η ειδοποίηση εμφανίστηκε, άρα το κανάλι ΕΠΑΙΞΕ ήδη τον ήχο.
+      rememberAssignmentPush(response?.notification, true);
       fetchOrders();
     });
 
@@ -354,9 +365,36 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         return knownMyOrderIds.current !== null && !knownMyOrderIds.current.has(o.id);
       });
       if (fresh.length > 0) {
-        fresh.forEach(o => assignedByPushIds.current.delete(String(o.id)));
+        // ΜΙΑ ΦΟΡΑ Ο ΗΧΟΣ. Αν το push έχει ήδη ηχήσει στη συσκευή, ο in-app
+        // συναγερμός θα έπεφτε ΠΑΝΩ του (ίδιο αρχείο, 20 δευτ., παράλληλα).
+        // Τρεις διαδρομές, μόνο η πρώτη πρέπει να ηχήσει:
+        //   • push σε foreground    → ο handler το σιώπησε      → ΗΧΕΙ ο in-app
+        //   • tap στην ειδοποίηση   → εμφανίστηκε, άρα ήχησε    → σιωπή
+        //   • άνοιγμα από launcher  → ειδοποίηση ακόμα στη μπάρα → σιωπή
+        // Η οπτική ειδοποίηση (setAssignmentAlert) μπαίνει ΠΑΝΤΑ — αλλιώς ο
+        // διανομέας δεν θα ήξερε ποια παραγγελία του ανατέθηκε.
+        let alreadySounded = fresh.some(o => pushAlreadySoundedIds.current.has(String(o.id)));
+        if (!alreadySounded) {
+          try {
+            const presented = await Notifications.getPresentedNotificationsAsync();
+            const shownIds = new Set(
+              (presented || [])
+                .map(n => n?.request?.content?.data?.orderId)
+                .filter(Boolean)
+                .map(String)
+            );
+            alreadySounded = fresh.some(o => shownIds.has(String(o.id)));
+          } catch (_) {
+            // Αν δεν μπορούμε να ρωτήσουμε το OS, προτιμάμε να ηχήσει: μια
+            // διπλή ειδοποίηση είναι ενοχλητική, μια χαμένη ανάθεση είναι ζημιά.
+          }
+        }
+        fresh.forEach(o => {
+          assignedByPushIds.current.delete(String(o.id));
+          pushAlreadySoundedIds.current.delete(String(o.id));
+        });
         setAssignmentAlert(fresh[0]);
-        startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
+        if (!alreadySounded) startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
       }
       knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));
 
