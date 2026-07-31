@@ -54,6 +54,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // ακόμα — ο διανομέας άκουγε τον ίδιο 20δευτερο ήχο δύο φορές παράλληλα μόλις
   // άνοιγε το κινητό (αναφορά πελάτη 30/07/2026).
   const pushAlreadySoundedIds = useRef(new Set());
+  // Το επόμενο fetchOrders δεν επιτρέπεται να ηχήσει: μόλις επιστρέψαμε στο
+  // προσκήνιο, άρα ό,τι βρούμε «νέο» το έχει ήδη αναγγείλει το push.
+  const suppressAlarmOnNextFetch = useRef(false);
   const alarmTimers = useRef([]);
   // Ποιες ήταν προγραμματισμένες στο τελευταίο fetch. Χρειάζεται ως ref (και όχι
   // state) γιατί το διαβάζει ο realtime handler, που ζει σε effect με άδειο
@@ -125,8 +128,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     // 20δευτερο συναγερμό μόλις ανοίξει η εφαρμογή. Τα 'reassign_away'/'cancel'
     // ΔΕΝ μπαίνουν εδώ επίτηδες: η παραγγελία φεύγει από τη λίστα του, δεν έρχεται
     // — δεν έχει νόημα να τον υποδεχτεί συναγερμός ανάθεσης όταν ανοίξει.
-    // `alreadySounded`: το push ΕΚΑΝΕ ήδη θόρυβο στη συσκευή. Καθορίζει αν ο
-    // in-app συναγερμός θα ξαναχτυπήσει ή θα μείνει σιωπηλός (βλ. fetchOrders).
+    // ΠΟΙΟΣ ΗΧΕΙ, ΤΟ ANDROID Ή ΕΜΕΙΣ — ο κανόνας που κρίνει τα πάντα εδώ:
+    //
+    // Το FCM payload της send-assignment-notification περιέχει μπλοκ
+    // `notification`, οπότε ΟΤΑΝ Η ΕΦΑΡΜΟΓΗ ΔΕΝ ΕΙΝΑΙ ΜΠΡΟΣΤΑ το Android
+    // εμφανίζει και ηχεί την ειδοποίηση ΜΟΝΟ ΤΟΥ (κανάλι assignments_urgent_v3,
+    // assignment.wav, 20"). Ο κώδικάς μας δεν συμμετέχει καθόλου.
+    // Ο handler του App.js (shouldPlaySound:false) ισχύει ΜΟΝΟ σε foreground.
+    //
+    // Άρα: ο in-app συναγερμός επιτρέπεται ΜΟΝΟ αν η εφαρμογή ήταν πραγματικά
+    // μπροστά τη στιγμή που ήρθε το push. Κάθε άλλη περίπτωση έχει ήδη ηχήσει
+    // από το λειτουργικό και ένας δεύτερος ήχος θα έπεφτε ΠΑΝΩ του.
     const rememberAssignmentPush = (notification, alreadySounded) => {
       const data = notification?.request?.content?.data;
       if (!data) return;
@@ -138,15 +150,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
-      // FOREGROUND: ο handler του App.js επιστρέφει shouldPlaySound:false για
-      // assign/reassign, άρα το push ΔΕΝ ήχησε — ο in-app συναγερμός πρέπει.
-      rememberAssignmentPush(notification, false);
+      // Ο listener χτυπά και σε background (η εφαρμογή ζει ακόμα). ΤΟΤΕ όμως το
+      // Android έχει ήδη ηχήσει. Το AppState είναι το μόνο αξιόπιστο κριτήριο —
+      // δεν εξαρτάται από ανάγνωση της μπάρας ειδοποιήσεων ούτε από το OEM.
+      rememberAssignmentPush(notification, AppState.currentState !== 'active');
       fetchOrders();
     });
 
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
-      // Όταν ο οδηγός κάνει tap την ειδοποίηση από Lock Screen / Background:
-      // η ειδοποίηση εμφανίστηκε, άρα το κανάλι ΕΠΑΙΞΕ ήδη τον ήχο.
+      // Tap στην ειδοποίηση ⇒ ήταν ορατή ⇒ το κανάλι ΕΠΑΙΞΕ τον ήχο.
       rememberAssignmentPush(response?.notification, true);
       fetchOrders();
     });
@@ -178,7 +190,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       .subscribe();
 
     const appStateSubscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState === 'active') fetchOrders(); 
+      if (nextAppState === 'active') {
+        // ΔΕΥΤΕΡΗ ΓΡΑΜΜΗ ΑΜΥΝΑΣ. Ο διανομέας ανοίγει την εφαρμογή από το εικονίδιο
+        // (όχι με tap στην ειδοποίηση): κανένας listener δεν χτυπά, αλλά η ανάθεση
+        // εμφανίζεται ως «νέα» σε αυτό ακριβώς το fetch και θα ξεκινούσε συναγερμό
+        // — ενώ ο ήχος του Android παίζει ΑΚΟΜΑ. Ό,τι ανακαλύπτεται με την
+        // επιστροφή στο προσκήνιο συνοδεύτηκε ήδη από push, οπότε μένει σιωπηλό.
+        // Δεν εξαρτάται από το orderId του payload — δουλεύει ό,τι κι αν στείλει
+        // το FCM.
+        suppressAlarmOnNextFetch.current = true;
+        fetchOrders();
+      }
     });
 
     // ─── ΛΗΨΗ ΜΗΝΥΜΑΤΩΝ ΑΠΟ ΚΕΝΤΡΟ ΕΛΕΓΧΟΥ (BROADCAST) ───
@@ -256,6 +278,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         if (p) { p.loop = false; p.pause(); }
       } catch (e) { console.log('Audio Error:', e); }
     });
+    // ΚΑΙ ΤΟΝ ΗΧΟ ΤΟΥ ΛΕΙΤΟΥΡΓΙΚΟΥ. Τα παραπάνω σταματούν μόνο ό,τι παίζει η
+    // ΕΦΑΡΜΟΓΗ. Ο ήχος του push τον παίζει το Android μέσω του καναλιού
+    // (assignment.wav, 20") και ζει εντελώς έξω από το expo-audio — γι' αυτό ο
+    // διανομέας πατούσε «Το είδα (ΟΚ)» και ο ήχος συνέχιζε. Το μόνο χερούλι
+    // πάνω του είναι η ακύρωση της ίδιας της ειδοποίησης.
+    Notifications.dismissAllNotificationsAsync().catch(() => {});
   }
 
   // `autoStopMs = 0` σημαίνει «μέχρι να το σταματήσει ο χρήστης». `targetPlayer`
@@ -266,7 +294,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     Vibration.vibrate([0, 600, 400], true); // επαναλαμβανόμενη δόνηση
     try {
       if (targetPlayer) {
-        targetPlayer.loop = true;
+        // LOOP ΜΟΝΟ όπου χρειάζεται πραγματικά: στο μήνυμα κέντρου (autoStopMs = 0),
+        // που πρέπει να επιμένει μέχρι το «ΟΚ». Η ανάθεση έχει αρχείο 20" και
+        // παράθυρο 20", άρα το loop δεν πρόσθετε τίποτα — πρόσθετε όμως ρίσκο: αν
+        // το χρονόμετρο χανόταν ή μετατίθετο (δεύτερο startAlarm στο 19ο δευτ.),
+        // ο ήχος δεν είχε τίποτα να τον σταματήσει και «βαρούσε» ασταμάτητα.
+        // Χωρίς loop, μία ανάγνωση του αρχείου είναι φυσικό όριο.
+        targetPlayer.loop = autoStopMs === 0;
         targetPlayer.volume = 1.0;
         targetPlayer.seekTo(0);
         targetPlayer.play();
@@ -364,37 +398,29 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         if (assignedByPushIds.current.has(String(o.id))) return true;
         return knownMyOrderIds.current !== null && !knownMyOrderIds.current.has(o.id);
       });
+
+      // ΚΑΤΑΝΑΛΩΝΕΤΑΙ ΠΑΝΤΑ, ακόμα κι όταν δεν βρέθηκε τίποτα νέο: αν το
+      // κρατούσαμε μέχρι να υπάρξει `fresh`, θα έμενε αναμμένο και θα έπνιγε
+      // έναν επόμενο, γνήσιο συναγερμό ώρες αργότερα.
+      const justResumed = suppressAlarmOnNextFetch.current;
+      suppressAlarmOnNextFetch.current = false;
+
       if (fresh.length > 0) {
-        // ΜΙΑ ΦΟΡΑ Ο ΗΧΟΣ. Αν το push έχει ήδη ηχήσει στη συσκευή, ο in-app
-        // συναγερμός θα έπεφτε ΠΑΝΩ του (ίδιο αρχείο, 20 δευτ., παράλληλα).
-        // Τρεις διαδρομές, μόνο η πρώτη πρέπει να ηχήσει:
-        //   • push σε foreground    → ο handler το σιώπησε      → ΗΧΕΙ ο in-app
-        //   • tap στην ειδοποίηση   → εμφανίστηκε, άρα ήχησε    → σιωπή
-        //   • άνοιγμα από launcher  → ειδοποίηση ακόμα στη μπάρα → σιωπή
+        // ΜΙΑ ΦΟΡΑ Ο ΗΧΟΣ. Τρεις διαδρομές, ηχεί ΜΟΝΟ η πρώτη:
+        //   • push με την εφαρμογή ΜΠΡΟΣΤΑ → ο handler το σιώπησε → ηχεί ο in-app
+        //   • tap στην ειδοποίηση          → ήταν ορατή, ήχησε    → σιωπή
+        //   • άνοιγμα από το εικονίδιο     → ήχησε όσο λείπαμε    → σιωπή
         // Η οπτική ειδοποίηση (setAssignmentAlert) μπαίνει ΠΑΝΤΑ — αλλιώς ο
         // διανομέας δεν θα ήξερε ποια παραγγελία του ανατέθηκε.
-        let alreadySounded = fresh.some(o => pushAlreadySoundedIds.current.has(String(o.id)));
-        if (!alreadySounded) {
-          try {
-            const presented = await Notifications.getPresentedNotificationsAsync();
-            const shownIds = new Set(
-              (presented || [])
-                .map(n => n?.request?.content?.data?.orderId)
-                .filter(Boolean)
-                .map(String)
-            );
-            alreadySounded = fresh.some(o => shownIds.has(String(o.id)));
-          } catch (_) {
-            // Αν δεν μπορούμε να ρωτήσουμε το OS, προτιμάμε να ηχήσει: μια
-            // διπλή ειδοποίηση είναι ενοχλητική, μια χαμένη ανάθεση είναι ζημιά.
-          }
-        }
+        const announcedByOs =
+          justResumed || fresh.some(o => pushAlreadySoundedIds.current.has(String(o.id)));
+
         fresh.forEach(o => {
           assignedByPushIds.current.delete(String(o.id));
           pushAlreadySoundedIds.current.delete(String(o.id));
         });
         setAssignmentAlert(fresh[0]);
-        if (!alreadySounded) startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
+        if (!announcedByOs) startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
       }
       knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));
 
