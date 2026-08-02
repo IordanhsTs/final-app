@@ -271,6 +271,24 @@ export async function clearDriverPresenceEverywhere(driverId) {
           body: JSON.stringify({ is_active: false, fcm_token: null }),
         });
       } catch (_) {}
+
+      // ΧΙΛΙΟΜΕΤΡΗΤΗΣ: κλείσιμο της βάρδιας τη στιγμή του logout. Χωρίς αυτό η
+      // βάρδια θα έκλεινε μόνη της μετά από 30 λεπτά σιωπής (migration 0013) —
+      // σωστά χιλιόμετρα αλλά φουσκωμένες ώρες. Best-effort: αν αποτύχει, το
+      // αυτόματο κλείσιμο του server παραμένει το δίχτυ ασφαλείας.
+      try {
+        await fetchWithTimeout(`${b.url}/rest/v1/rpc/end_driver_shift`, {
+          method: 'POST',
+          headers: {
+            apikey: b.anonKey,
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Content-Profile': getTenantSchema(),
+            'Accept-Profile': getTenantSchema(),
+          },
+          body: '{}',
+        });
+      } catch (_) {}
     })
   );
 }

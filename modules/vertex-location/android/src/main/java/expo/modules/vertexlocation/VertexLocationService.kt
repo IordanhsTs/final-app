@@ -33,6 +33,26 @@ class VertexLocationService : Service() {
     private const val CHANNEL_ID = "vertex_location_channel"
     private const val NOTIF_ID = 4321
 
+    // ── Κατώφλια χιλιομετρητή (ίδια με το migration 0013) ──
+    // Ελάχιστη μετατόπιση για να μετρήσει ένα στίγμα. Στα 10 δευτερόλεπτα ανά
+    // στίγμα, 20 m ≈ 7 km/h: ο θόρυβος του GPS πεθαίνει, ενώ το περπάτημα
+    // μέχρι την πόρτα του πελάτη δεν καίει βενζίνη ούτως ή άλλως.
+    private const val MIN_MOVE_M = 20.0
+    // Στίγμα με χειρότερη ακρίβεια από αυτή δεν είναι αξιόπιστο ούτε ως άγκυρα.
+    private const val MAX_ACCURACY_M = 25.0f
+    // Κάτω από ~5 km/h ο διανομέας δεν κινείται με τη μηχανή.
+    private const val MIN_SPEED_MS = 1.4f
+    // Πάνω από ~151 km/h δεν είναι μηχανή — είναι αλλαγή κεραίας ή κακό στίγμα.
+    private const val MAX_SPEED_MS = 42.0
+    // Κενό στη ροή στιγμάτων: δεν ενώνουμε τα δύο σημεία με ευθεία γραμμή.
+    private const val MAX_GAP_S = 300.0
+
+    private const val PREFS = "vertex_odometer"
+    private const val KEY_PENDING = "pending_m"
+    private const val KEY_INFLIGHT = "inflight_m"
+    private const val KEY_INFLIGHT_SEQ = "inflight_seq"
+    private const val KEY_SEQ = "seq"
+
     // Ενημέρωση token του ΖΩΝΤΑΝΟΥ service από τον JS client (μία αρχή αλήθειας:
     // ο JS είναι ο μόνος refresher και ταΐζει εδώ το φρέσκο token σε κάθε
     // TOKEN_REFRESHED). Έτσι σε κανονική χρήση το native ΔΕΝ κάνει το δικό του
@@ -56,11 +76,84 @@ class VertexLocationService : Service() {
   @Volatile private var accessToken: String? = null
   @Volatile private var refreshToken: String? = null
 
+  // ── ΧΙΛΙΟΜΕΤΡΗΤΗΣ ΒΑΡΔΙΑΣ ────────────────────────────────────────────────
+  // Μετράμε ΕΔΩ και όχι μόνο στον server, για δύο λόγους: (1) εδώ υπάρχουν το
+  // `accuracy` και το `speed` του στίγματος — το speed έρχεται από Doppler και
+  // είναι πολύ πιο αξιόπιστο από τη διαφορά δύο θέσεων· (2) όταν πέφτει το
+  // δίκτυο, η μέτρηση συνεχίζεται τοπικά και στέλνεται μόλις επανέλθει.
+  //
+  // Στέλνουμε ΔΙΑΦΟΡΕΣ μέτρων (όχι σύνολο) με αύξοντα αριθμό. Βλ. migration
+  // 0013 για το γιατί: ο server μπορεί να κόψει τη βάρδια στα δύο όσο εμείς
+  // είμαστε offline, και ένα σωρευτικό νούμερο θα μετριόταν δύο φορές.
+  private var lastFix: Location? = null
+  private var pendingMeters: Double = 0.0    // μαζεμένα, δεν στάλθηκαν ακόμα
+  private var inFlightMeters: Double = 0.0   // στάλθηκαν, δεν επιβεβαιώθηκαν
+  private var inFlightSeq: Long = 0
+  private var pingSeq: Long = 0
+  private var deviceSession: String = ""
+
   private val callback = object : LocationCallback() {
     override fun onLocationResult(result: LocationResult) {
       val loc = result.lastLocation ?: return
-      executor.execute { sendLocation(loc) }
+      executor.execute {
+        accumulateDistance(loc)
+        sendLocation(loc)
+      }
     }
+  }
+
+  // Πόσα μέτρα προσθέτει αυτό το στίγμα. Όλα τα κατώφλια είναι τα ίδια με του
+  // server (migration 0013) ώστε τα δύο μονοπάτια να μη δίνουν άλλο νούμερο.
+  private fun accumulateDistance(loc: Location) {
+    val prev = lastFix
+
+    // Κακό στίγμα: δεν το εμπιστευόμαστε ούτε ως άγκυρα για το επόμενο.
+    if (loc.hasAccuracy() && loc.accuracy > MAX_ACCURACY_M) return
+
+    if (prev == null) { lastFix = loc; return }
+
+    val dt = (loc.time - prev.time) / 1000.0
+    // Κενό κάλυψης: δεν ξέρουμε τι έγινε ενδιάμεσα → νέο τμήμα, μηδέν χρέωση.
+    if (dt <= 0 || dt > MAX_GAP_S) { lastFix = loc; return }
+
+    // ΣΤΑΣΗ: το Doppler speed είναι η πιο αξιόπιστη ένδειξη ακινησίας. Κρατάμε
+    // την άγκυρα ώστε αργή αλλά πραγματική κίνηση να συσσωρευτεί και να μετρηθεί.
+    if (loc.hasSpeed() && loc.speed < MIN_SPEED_MS) return
+
+    val d = prev.distanceTo(loc).toDouble()
+
+    // ΘΟΡΥΒΟΣ: κάτω από το κατώφλι κίνησης — η άγκυρα ΔΕΝ μετακινείται.
+    if (d < MIN_MOVE_M) return
+
+    // ΤΗΛΕΜΕΤΑΦΟΡΑ: αδύνατη ταχύτητα → κακό στίγμα, κρατάμε την παλιά άγκυρα.
+    if (d / dt > MAX_SPEED_MS) return
+
+    pendingMeters += d
+    lastFix = loc
+    persistOdometer()
+  }
+
+  // Ο χιλιομετρητής επιβιώνει σε restart του service (START_STICKY) και σε
+  // θάνατο της εφαρμογής — αλλιώς κάθε kill θα έσβηνε αμέτρητα χιλιόμετρα.
+  private fun persistOdometer() {
+    try {
+      getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        .putFloat(KEY_PENDING, pendingMeters.toFloat())
+        .putFloat(KEY_INFLIGHT, inFlightMeters.toFloat())
+        .putLong(KEY_INFLIGHT_SEQ, inFlightSeq)
+        .putLong(KEY_SEQ, pingSeq)
+        .apply()
+    } catch (_: Exception) {}
+  }
+
+  private fun restoreOdometer() {
+    try {
+      val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      pendingMeters  = p.getFloat(KEY_PENDING, 0f).toDouble()
+      inFlightMeters = p.getFloat(KEY_INFLIGHT, 0f).toDouble()
+      inFlightSeq    = p.getLong(KEY_INFLIGHT_SEQ, 0L)
+      pingSeq        = p.getLong(KEY_SEQ, 0L)
+    } catch (_: Exception) {}
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -79,6 +172,13 @@ class VertexLocationService : Service() {
     if (driverId == null || supabaseUrl == null || anonKey == null) {
       stopSelf(); return START_NOT_STICKY
     }
+
+    // Νέα συνεδρία χιλιομετρητή σε κάθε εκκίνηση: ο server τη χρησιμοποιεί για
+    // να δεχτεί αρίθμηση που ξαναρχίζει από το 1 μετά από restart. Τα μέτρα που
+    // δεν πρόλαβαν να σταλούν επιβιώνουν (restoreOdometer) και φεύγουν τώρα.
+    deviceSession = java.util.UUID.randomUUID().toString()
+    lastFix = null
+    restoreOdometer()
 
     createChannel()
     startAsForeground()
@@ -148,10 +248,26 @@ class VertexLocationService : Service() {
 
   // ── Δικτυακή αποστολή — τρέχει στο executor thread, εκτός JS bridge ──
   private fun sendLocation(loc: Location) {
-    if (patchLocation(loc, accessToken)) return
-    // 401 ή σφάλμα → δοκίμασε refresh του JWT και ξαναστείλε
-    if (refreshAccessToken()) {
-      patchLocation(loc, accessToken)
+    // Ετοιμάζουμε το πακέτο μέτρων ΠΡΙΝ την αποστολή. Αν η προηγούμενη
+    // απόπειρα απέτυχε, ξαναστέλνουμε το ΙΔΙΟ πακέτο με τον ΙΔΙΟ αύξοντα
+    // αριθμό: αν τελικά είχε γραφτεί και χάθηκε μόνο η απάντηση, ο server το
+    // απορρίπτει ως διπλό. Προτιμούμε να χάσουμε μερικά μέτρα παρά να
+    // χρεώσουμε βενζίνη δύο φορές.
+    if (inFlightMeters <= 0.0 && pendingMeters > 0.0) {
+      pingSeq += 1
+      inFlightSeq = pingSeq
+      inFlightMeters = pendingMeters
+      pendingMeters = 0.0
+      persistOdometer()
+    }
+
+    val sent = patchLocation(loc, accessToken)
+      // 401 ή σφάλμα → δοκίμασε refresh του JWT και ξαναστείλε
+      || (refreshAccessToken() && patchLocation(loc, accessToken))
+
+    if (sent && inFlightMeters > 0.0) {
+      inFlightMeters = 0.0
+      persistOdometer()
     }
   }
 
@@ -183,6 +299,14 @@ class VertexLocationService : Service() {
         .put("latitude", loc.latitude)
         .put("longitude", loc.longitude)
       readBatteryLevel()?.let { body.put("battery_level", it) }
+      // Ο χιλιομετρητής ταξιδεύει μαζί με το στίγμα — καμία επιπλέον κλήση.
+      // Στέλνεται μόνο όταν υπάρχουν μέτρα να αναφερθούν· έτσι τα στίγματα σε
+      // στάση μένουν ακριβώς όσο ελαφριά ήταν πριν.
+      if (inFlightMeters > 0.0) {
+        body.put("device_distance_m", inFlightMeters)
+        body.put("device_session", deviceSession)
+        body.put("device_ping_seq", inFlightSeq)
+      }
       OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
       conn.responseCode in 200..299
     } catch (e: Exception) {
@@ -235,6 +359,9 @@ class VertexLocationService : Service() {
 
   override fun onDestroy() {
     super.onDestroy()
+    // Ό,τι μετρήθηκε και δεν πρόλαβε να σταλεί περιμένει στον δίσκο για την
+    // επόμενη εκκίνηση — δεν πετάμε χιλιόμετρα επειδή έκλεισε το service.
+    persistOdometer()
     isRunning = false
     instance = null
     try { if (::fused.isInitialized) fused.removeLocationUpdates(callback) } catch (_: Exception) {}
