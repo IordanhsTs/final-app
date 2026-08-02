@@ -5,7 +5,10 @@ export type TrackingConfig = {
   supabaseUrl: string;
   anonKey: string;
   accessToken: string;
-  refreshToken: string;
+  // Προαιρετικό: δίνεται μόνο σε builds που αποθηκεύουν μόνιμα ό,τι ανανεώνουν
+  // (getTokens/clearTokens). Σε παλιότερα APK το native θα ανανέωνε χωρίς να το
+  // μάθει ποτέ ο JS — δηλαδή θα έσπαγε τη σύνδεση. Βλ. sessionStore.js.
+  refreshToken?: string;
   intervalMs?: string;
 };
 
@@ -19,8 +22,18 @@ export function stopTracking(): void {
 
 // Ενημερώνει το ζωντανό service με φρέσκο token (μία αρχή αλήθειας — ο JS refresher
 // ταΐζει το native ώστε να μη κάνει το δικό του, αποκλίνον refresh).
-export function updateToken(config: { accessToken: string; refreshToken: string }): void {
+export function updateToken(config: { accessToken: string; refreshToken?: string }): void {
   VertexLocation.updateToken(config);
+}
+
+// Τα τελευταία tokens που κρατά το native — διαβάζονται και με νεκρό service.
+export function getTokens(): { accessToken: string; refreshToken: string } {
+  return VertexLocation.getTokens();
+}
+
+// Σβήνει τη μόνιμη αποθήκη tokens (μόνο σε ηθελημένη αποσύνδεση).
+export function clearTokens(): void {
+  VertexLocation.clearTokens();
 }
 
 export function isTracking(): boolean {

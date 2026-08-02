@@ -6,7 +6,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, onBackendChange } from '../../supabase';
+import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, onBackendChange, hardSignOut } from '../../supabase';
 import { getStyles, Colors, CardColors } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -18,7 +18,71 @@ const messageSound = require('../../assets/message.wav');
 const emptyOrdersDark = require('../../assets/empty_orders_dark.png');
 const emptyOrdersLight = require('../../assets/empty_orders_light.png');
 
+// ── Πλαίσιο «σήμερα»: ολοκληρωμένες / χιλιόμετρα / ώρες βάρδιας ──────────────
+// Μετά από τόση σιωπή ο server κλείνει ΜΟΝΟΣ του τη βάρδια (c_shift_idle_s,
+// migration 0013). Το κρατάμε ίδιο εδώ ώστε ο μετρητής «Ενεργός» να μη συνεχίζει
+// να τρέχει στην οθόνη για μια βάρδια που η βάση θεωρεί ήδη τελειωμένη.
+const SHIFT_IDLE_MS = 30 * 60 * 1000;
 
+/**
+ * Χιλιόμετρα και χρόνος βάρδιας ΜΕΣΑ στο σημερινό 24ωρο (τοπική ώρα — η συσκευή
+ * του διανομέα είναι στην Ελλάδα, άρα ταυτίζεται με το Europe/Athens της αναφοράς).
+ *
+ * ΟΙ ΩΡΕΣ ΕΙΝΑΙ ΑΚΡΙΒΕΙΣ: κρατάμε την τομή κάθε βάρδιας με το [μεσάνυχτα, τώρα].
+ *
+ * ΤΑ ΧΙΛΙΟΜΕΤΡΑ ΣΕ ΒΑΡΔΙΑ ΠΟΥ ΠΕΡΝΑΕΙ ΤΑ ΜΕΣΑΝΥΧΤΑ ΜΟΙΡΑΖΟΝΤΑΙ ΚΑΤ' ΑΝΑΛΟΓΙΑ
+ * ΧΡΟΝΟΥ, γιατί δεν γίνεται αλλιώς: ο χιλιομετρητής κρατά ΕΝΑ σωρευτικό νούμερο
+ * ανά βάρδια (`driver_shifts.distance_m`) και δεν υπάρχει πουθενά ιστορικό
+ * στιγμάτων για να κοπεί στα μεσάνυχτα. Όταν η βάρδια ξεκινά και τελειώνει την
+ * ίδια μέρα — η συντριπτική πλειοψηφία — ο συντελεστής είναι 1, δηλαδή το νούμερο
+ * είναι ακριβές. Η προσέγγιση αφορά ΜΟΝΟ αυτό το κουτάκι: η χρέωση καυσίμων
+ * διαβάζει τη βάρδια ολόκληρη από το `driver_distance_report()` και δεν αγγίζεται.
+ */
+export function todayShiftTotals(shifts, now) {
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const t0 = dayStart.getTime();
+  const tNow = now.getTime();
+
+  let meters = 0;
+  let seconds = 0;
+
+  (shifts || []).forEach((s) => {
+    const start = new Date(s.started_at).getTime();
+    if (!Number.isFinite(start)) return;
+    const lastSeen = s.last_ping_at ? new Date(s.last_ping_at).getTime() : start;
+    // Ανοιχτή βάρδια: μετράει μέχρι ΤΩΡΑ μόνο όσο φτάνουν στίγματα. Αν το κινητό
+    // σιωπήσει (κλειστή εφαρμογή, άδεια μπαταρία), σταματάμε στο τελευταίο στίγμα
+    // — ακριβώς εκεί που θα την κλείσει και ο server. Αλλιώς ο μετρητής θα
+    // «δούλευε» όλη νύχτα με σβηστό τηλέφωνο.
+    const end = s.ended_at
+      ? new Date(s.ended_at).getTime()
+      : (tNow - lastSeen <= SHIFT_IDLE_MS ? tNow : lastSeen);
+
+    const total = Math.max(end - start, 0);
+    // Math.min(end, tNow): φράχτης για ρολόι server/συσκευής που πάει μπροστά.
+    const overlap = Math.max(Math.min(end, tNow) - Math.max(start, t0), 0);
+    if (overlap <= 0) return;
+
+    seconds += overlap / 1000;
+    meters += (Number(s.distance_m) || 0) * (total > 0 ? overlap / total : 0);
+  });
+
+  return { meters, seconds };
+}
+
+/** «0,0 km» — όπως στο σχέδιο του πελάτη (η κάρτα παραγγελίας γράφει «χλμ»). */
+function formatShiftKm(meters) {
+  return `${(meters / 1000).toFixed(1).replace('.', ',')} km`;
+}
+
+/** «00:00» — ώρες:λεπτά στη βάρδια. Μεγαλώνει πέρα από τις 24 αν χρειαστεί. */
+function formatShiftClock(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
 
 export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMode, setIsDarkMode }) {
   const styles = getStyles(isDarkMode);
@@ -40,6 +104,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [scheduledOrders, setScheduledOrders] = useState([]);
   const [activeTab, setActiveTab] = useState('pending');
   const [refreshing, setRefreshing] = useState(false);
+  // ── Πλαίσιο «σήμερα» στο τέλος της λίστας ──
+  // Κρατάμε τις ΓΡΑΜΜΕΣ των βαρδιών, όχι έτοιμα σύνολα: έτσι το «Ενεργός»
+  // προχωράει μόνο του σε κάθε χτύπο του ρολογιού παρακάτω, χωρίς νέο ερώτημα.
+  const [todayShifts, setTodayShifts] = useState([]);
+  const [todayCompleted, setTodayCompleted] = useState(0);
   // Ρολόι για τις αντίστροφες μετρήσεις (χτυπά ανά δευτερόλεπτο μόνο όταν χρειάζεται).
   const [now, setNow] = useState(new Date());
 
@@ -263,6 +332,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     const t = setInterval(() => setNow(new Date()), everySecond ? 1000 : 60000);
     return () => clearInterval(t);
   }, [scheduledOrders.length]);
+
+  // Τα χιλιόμετρα και οι ώρες αλλάζουν συνέχεια ΧΩΡΙΣ να συμβαίνει τίποτα με τις
+  // παραγγελίες, οπότε θέλουν δικό τους ρολόι αντί να κρεμαστούν στο fetchOrders
+  // (που τρέχει σε κάθε realtime event και θα διπλασίαζε τα ερωτήματα χωρίς λόγο).
+  // Το λεπτό αρκεί: και τα τρία νούμερα δείχνουν χοντρές μονάδες — τεμάχια,
+  // δέκατα του χιλιομέτρου, λεπτά. Πιάνει και τη μετάβαση των μεσανυχτών.
+  useEffect(() => {
+    fetchTodayStats();
+    const t = setInterval(fetchTodayStats, 60000);
+    return () => clearInterval(t);
+  }, []);
 
   // Ελέγχει ανεξάρτητα (κάθε 5") αν το τελευταίο GPS update είναι ακόμα φρέσκο —
   // ξεχωριστό από το ρολόι πάνω, που σε ήσυχες στιγμές χτυπά μόνο ανά λεπτό και
@@ -498,6 +578,39 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     }
   }
 
+  // Τα τρία νούμερα του πλαισίου «σήμερα». Δύο ερωτήματα παράλληλα, μία φορά το
+  // λεπτό — φτηνά και τα δύο (το πρώτο είναι HEAD request, κατεβάζει μόνο το
+  // πλήθος· το δεύτερο 4 στήλες από ελάχιστες γραμμές).
+  async function fetchTodayStats() {
+    try {
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+
+      const [completed, shifts] = await Promise.all([
+        supabase.from('orders')
+          .select('id', { count: 'exact', head: true })
+          .eq('driver_id', currentUser.id)
+          .eq('status', 'completed')
+          .gte('completed_at', dayStart.toISOString()),
+        // ΧΩΡΙΣ φίλτρο ημερομηνίας εδώ: ποιο κομμάτι κάθε βάρδιας πέφτει μέσα στο
+        // σημερινό 24ωρο το κρίνει το todayShiftTotals — μια βάρδια μπορεί να
+        // ξεκίνησε χθες βράδυ και να τρέχει ακόμα. Οι 30 τελευταίες τις καλύπτουν
+        // άνετα: η βάρδια κλείνει μετά από 30' σιωπής, οπότε ούτε με προβληματικό
+        // GPS δεν βγαίνουν τόσες σε μία μέρα.
+        supabase.from('driver_shifts')
+          .select('started_at, ended_at, last_ping_at, distance_m')
+          .eq('driver_id', currentUser.id)
+          .order('started_at', { ascending: false })
+          .limit(30),
+      ]);
+
+      setTodayCompleted(completed.count || 0);
+      setTodayShifts(shifts.data || []);
+    } catch (e) {
+      console.log("Stats Error:", e);
+    }
+  }
+
   // Ενημερωτικό μήνυμα (μόνο ΟΚ) μέσα από το ίδιο styled modal που χρησιμοποιούν οι
   // επιβεβαιώσεις — αντί για το ασύμβατο-με-το-theme native Alert.alert.
   function showAlert(title, message) {
@@ -576,6 +689,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         setConfirmModalVisible(false);
         await supabase.from('orders').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', orderId);
         fetchOrders();
+        // Χωρίς αυτό ο μετρητής «Σύνολο σήμερα» θα άργαγε ως ένα λεπτό να ανέβει
+        // — ακριβώς τη στιγμή που ο διανομέας κοιτάζει αν μέτρησε η παράδοση.
+        fetchTodayStats();
       }
     });
     setConfirmModalVisible(true);
@@ -586,7 +702,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     // οι ειδοποιήσεις παραγγελιών από οποιοδήποτε σύστημα.
     await clearDriverPresenceEverywhere(currentUser.id);
     await supabase.removeAllChannels(); // FORCE KILL ALL LISTENERS
-    await supabase.auth.signOut();
+    // hardSignOut: σβήνει ΚΑΙ τα tokens του native service (αλλιώς θα «ανάσταιναν»
+    // τη σύνδεση στο επόμενο άνοιγμα) ΚΑΙ το τοπικό session, ακόμη κι αν το
+    // αίτημα προς τον server αποτύχει λόγω δικτύου.
+    await hardSignOut({ global: true });
     setCurrentUser(null);
   }
 
@@ -966,6 +1085,56 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     );
   }
 
+  // Παράγωγα του ρολογιού `now`, όχι state: το «Ενεργός» ανεβαίνει έτσι μόνο του
+  // κάθε λεπτό (η FlatList ξαναζωγραφίζει ήδη μέσω του extraData) χωρίς να
+  // ξαναρωτήσουμε τη βάση, και μηδενίζει μόλις το `now` περάσει τα μεσάνυχτα.
+  const { meters: todayMeters, seconds: todaySeconds } = todayShiftTotals(todayShifts, now);
+
+  // ── Πλαίσιο «σήμερα»: το κλείσιμο της λίστας (σχέδιο πελάτη 02/08/2026) ────
+  // ΚΥΛΑΕΙ ΜΑΖΙ ΜΕ ΤΗ ΛΙΣΤΑ και δεν είναι σταθερή μπάρα: μια μόνιμη μπάρα θα
+  // έτρωγε ~75px ύψος από τις παραγγελίες — ακριβώς το ύψος που κερδίσαμε με το
+  // σφίξιμο της κάρτας (αιτήματα πελάτη 31/07 και 02/08). Με άδεια λίστα
+  // εμφανίζεται ούτως ή άλλως στο κάτω μέρος της οθόνης, όπως στο σχέδιο, γιατί
+  // το contentContainerStyle έχει flexGrow και το άδειο πλαίσιο τεντώνεται από πάνω.
+  //
+  // Επιστρέφει ΣΤΟΙΧΕΙΟ (όχι component) — ίδιος λόγος με το renderEmptyOrders.
+  function renderTodayStats() {
+    const box = {
+      flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: theme.surface, borderRadius: 16,
+      borderWidth: 1, borderColor: theme.border,
+      paddingVertical: 11, paddingHorizontal: 10,
+    };
+
+    const cells = [
+      { key: 'orders', icon: <Feather name="clipboard" size={17} color={theme.accent} />, label: 'Σύνολο σήμερα', value: String(todayCompleted) },
+      // Και τα τρία εικονίδια από Feather: σε τρία κολλητά κουτάκια, δύο
+      // διαφορετικά πάχη γραμμής (Feather 24άρι vs Ionicons 512άρι) φαίνονται.
+      { key: 'km', icon: <Feather name="map" size={17} color={theme.accent} />, label: 'Χιλιόμετρα', value: formatShiftKm(todayMeters) },
+      { key: 'time', icon: <Feather name="clock" size={17} color={theme.accent} />, label: 'Ενεργός', value: formatShiftClock(todaySeconds) },
+    ];
+
+    return (
+      <View style={{ flexDirection: 'row', gap: 8, marginHorizontal: 16, marginTop: 8, marginBottom: 20 }}>
+        {cells.map((c) => (
+          <View key={c.key} style={box}>
+            {c.icon}
+            {/* flexShrink ΚΑΙ numberOfLines: σε στενή οθόνη η «Σύνολο σήμερα»
+                κόβεται με αποσιωπητικά αντί να σπρώξει το κουτί εκτός γραμμής. */}
+            <View style={{ flexShrink: 1 }}>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: theme.subtitle }} numberOfLines={1}>
+                {c.label}
+              </Text>
+              <Text style={{ fontSize: 16, fontWeight: '900', color: theme.text, marginTop: 2 }} numberOfLines={1}>
+                {c.value}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
   // Καταστήματα που εμφανίζονται στο επιλεγμένο διάστημα — αυτά γίνονται τα
   // κουμπιά του φίλτρου (όχι όλα τα καταστήματα της εταιρίας).
   const historyStores = [];
@@ -1093,7 +1262,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // περισσεύει (χωρίς αυτό κολλάει στην κορυφή). Με παραγγελίες δεν αλλάζει τίποτα.
         contentContainerStyle={{ flexGrow: 1 }}
         ListEmptyComponent={renderEmptyOrders()}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchOrders} />}
+        ListFooterComponent={renderTodayStats()}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { fetchOrders(); fetchTodayStats(); }}
+          />
+        }
       />
 
       {/* Hamburger Menu Modal */}

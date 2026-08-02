@@ -2,6 +2,7 @@ import 'react-native-url-polyfill/auto';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import { createAuthStorage, decodeJwtClaims, clearNativeTokens, forgetDriverProfile } from './src/services/sessionStore';
 
 // ─── FAILOVER: primary + standby backend ─────────────────────────────────────
 // Αν δεν οριστεί EXPO_PUBLIC_SUPABASE_STANDBY_URL, η εφαρμογή δουλεύει ακριβώς
@@ -48,7 +49,11 @@ function buildClient(index) {
   const b = BACKENDS[index];
   return createClient(b.url, b.anonKey, {
     auth: {
-      storage: AsyncStorage,
+      // ΟΧΙ σκέτο AsyncStorage: ο adapter υιοθετεί τα tokens του native GPS
+      // service όταν εκείνο έχει ανανεώσει πιο πρόσφατα (βλ. sessionStore.js).
+      // Χωρίς αυτό, μια εφαρμογή που έμεινε κλειστή μέρες άνοιγε με ακυρωμένο
+      // refresh token και ο διανομέας έβρισκε οθόνη εισόδου.
+      storage: createAuthStorage(STORAGE_KEY),
       storageKey: STORAGE_KEY,
       persistSession: true,
       autoRefreshToken: true,
@@ -60,21 +65,44 @@ function buildClient(index) {
 
 let client = buildClient(activeIndex);
 
-// ─── MULTI-TENANT: schema ανά εταιρία (από το `tenant` claim του JWT) ──────────
-// (React Native/Hermes: δικός μας base64url decoder, χωρίς εξάρτηση σε atob)
-function b64urlDecode(input) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  const str = input.replace(/-/g, '+').replace(/_/g, '/');
-  let output = '';
-  for (let bc = 0, bs = 0, i = 0; i < str.length; i++) {
-    const c = chars.indexOf(str.charAt(i));
-    if (c === -1 || c === 64) continue;
-    bs = bc % 4 ? bs * 64 + c : c;
-    if (bc++ % 4) output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6)));
-  }
-  return output;
+// ─── ΗΘΕΛΗΜΕΝΗ vs ΑΚΟΥΣΙΑ ΑΠΟΣΥΝΔΕΣΗ ─────────────────────────────────────────
+// Το supabase-js βγάζει ΤΟ ΙΔΙΟ 'SIGNED_OUT' και όταν πατήσει ο διανομέας
+// «Αποσύνδεση» και όταν απλώς αποτύχει η ανανέωση του token. Χωρίς αυτό το
+// flag η εφαρμογή δεν μπορεί να τα ξεχωρίσει — και η δεύτερη περίπτωση ΔΕΝ
+// επιτρέπεται να πετάει τον διανομέα στην οθόνη εισόδου.
+let signOutWasIntentional = false;
+
+// Καλείται ΑΜΕΣΩΣ πριν από κάθε ηθελημένο signOut (διανομέας, admin, άλλη συσκευή).
+export function markIntentionalSignOut() {
+  signOutWasIntentional = true;
 }
 
+export function consumeIntentionalSignOut() {
+  const was = signOutWasIntentional;
+  signOutWasIntentional = false;
+  return was;
+}
+
+// Αποσύνδεση που ΤΕΛΕΙΩΝΕΙ. Το signOut() του supabase-js, αν δεν έχει δίκτυο,
+// επιστρέφει σφάλμα ΧΩΡΙΣ να σβήσει το τοπικό session: η εφαρμογή έδειχνε οθόνη
+// εισόδου και στο επόμενο άνοιγμα ξανασυνδεόταν μόνη της. Η αποσύνδεση όμως
+// είναι ρητή εντολή, όχι ευχή — οπότε καθαρίζουμε τον δίσκο ούτως ή άλλως, μαζί
+// με τα tokens του native service και το τοπικό προφίλ.
+//   global=true  → ακύρωση του session παντού (δική μας αποσύνδεση, εντολή admin)
+//   global=false → μόνο σε αυτή τη συσκευή (ο λογαριασμός συνεχίζει σε άλλο κινητό)
+export async function hardSignOut({ global = true } = {}) {
+  markIntentionalSignOut();
+  clearNativeTokens();
+  try {
+    await client.auth.signOut({ scope: global ? 'global' : 'local' });
+  } catch (_) {}
+  await Promise.all([
+    AsyncStorage.removeItem(STORAGE_KEY).catch(() => {}),
+    forgetDriverProfile(),
+  ]);
+}
+
+// ─── MULTI-TENANT: schema ανά εταιρία (από το `tenant` claim του JWT) ──────────
 // Ξαναχτίζει τον client με το τρέχον tenantSchema (ίδιο μοτίβο με το failover switchTo).
 async function rebuildClient(reason) {
   const old = client;
@@ -89,7 +117,7 @@ async function rebuildClient(reason) {
 async function applyTenantFromSession(session) {
   if (!session || !session.access_token) return;
   try {
-    const claims = JSON.parse(b64urlDecode(session.access_token.split('.')[1]));
+    const claims = decodeJwtClaims(session.access_token) || {};
     const t = claims.tenant;
     if (t && t !== tenantSchema) {
       tenantSchema = t;
@@ -122,6 +150,18 @@ function attachTenantWatcher() {
   } catch (_) {}
 }
 attachTenantWatcher();
+
+// ─── ΑΝΑΝΕΩΣΗ TOKEN ΜΟΝΟ ΜΕ ΤΗΝ ΕΦΑΡΜΟΓΗ ΜΠΡΟΣΤΑ ─────────────────────────────
+// Ο επίσημος τρόπος του Supabase για React Native. Στο παρασκήνιο το Android
+// παγώνει τα timers, οπότε ο ticker ανανέωσης ξυπνούσε σε τυχαίες στιγμές και
+// έκανε απόπειρες που είτε αποτύγχαναν είτε έπεφταν πάνω στην ανανέωση του
+// native service. Όσο είμαστε πίσω, το native κρατά το κάστρο.
+AppState.addEventListener('change', (state) => {
+  try {
+    if (state === 'active') client.auth.startAutoRefresh();
+    else client.auth.stopAutoRefresh();
+  } catch (_) {}
+});
 
 function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();

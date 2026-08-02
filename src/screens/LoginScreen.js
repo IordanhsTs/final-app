@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View, Alert, Platform, StyleSheet, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { supabase } from '../../supabase';
+import { supabase, hardSignOut } from '../../supabase';
 import { Colors } from '../styles/globalStyles';
 
 export default function LoginScreen({ setCurrentUser, isDarkMode }) {
@@ -40,7 +40,7 @@ export default function LoginScreen({ setCurrentUser, isDarkMode }) {
     if (data && !error) {
       if (data.is_blocked === true) {
         Alert.alert('Λογαριασμός Μπλοκαρισμένος', 'Η πρόσβαση στο λογαριασμό σας έχει διακοπεί.');
-        await supabase.auth.signOut();
+        await hardSignOut({ global: true });
         setLoading(false);
         return;
       }
@@ -50,7 +50,7 @@ export default function LoginScreen({ setCurrentUser, isDarkMode }) {
       console.log('Profile Fetch Error:', error);
       Alert.alert('Σφάλμα', 'Ο λογαριασμός δεν βρέθηκε στο σύστημα διανομέων.');
       // Αν δεν βρεθεί προφίλ, αποσυνδέουμε ξανά για ασφάλεια
-      await supabase.auth.signOut(); 
+      await hardSignOut({ global: true });
       setLoading(false);
     }
   }

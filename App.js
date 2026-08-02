@@ -5,8 +5,9 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase, onBackendChange, onTokenRefresh, clearDriverPresenceEverywhere, getTenantSchema } from './supabase';
+import { supabase, onBackendChange, onTokenRefresh, clearDriverPresenceEverywhere, getTenantSchema, consumeIntentionalSignOut, hardSignOut } from './supabase';
 import { startNativeTracking, stopNativeTracking, ensureBatteryExemption, updateNativeToken } from './src/services/nativeLocationService';
+import { readNativeTokens, cacheDriverProfile, readCachedDriverProfile } from './src/services/sessionStore';
 // Εισαγωγή των Οθονών
 import LoginScreen from './src/screens/LoginScreen';
 import DriverDashboard from './src/screens/DriverDashboard';
@@ -62,6 +63,46 @@ export default function App() {
   // παρακάτω θα έγραφε την προεπιλογή πάνω στην αποθηκευμένη τιμή πριν προλάβει
   // να φορτωθεί, και η επιλογή του διανομέα θα χανόταν σε κάθε εκκίνηση.
   const themeLoaded = useRef(false);
+  // Φρένο επανεισόδου: η ανάκτηση καλεί setSession, που σε αποτυχία βγάζει ΚΑΙ
+  // ΑΥΤΗ 'SIGNED_OUT' — χωρίς το φρένο θα κυνηγούσε την ουρά της.
+  const recoveringSession = useRef(false);
+  // Γίνεται false μόνο σε επαναφορά από τοπικό αντίγραφο χωρίς απάντηση της
+  // βάσης: τότε ΔΕΝ δηλώνουμε τη συσκευή ως ενεργή, γιατί δεν ξέρουμε αν ο
+  // λογαριασμός έχει στο μεταξύ μετακομίσει σε άλλο κινητό.
+  const deviceClaimAllowed = useRef(true);
+
+  // Τελευταία ελπίδα όταν το token του JS είναι άκυρο: το native GPS service
+  // κρατά τη δική του, μόνιμα αποθηκευμένη έκδοση (SharedPreferences) — αν αυτό
+  // ανανέωσε τελευταίο, εκεί βρίσκεται το ζωντανό refresh token. Επιστρέφει το
+  // session ή null. Το φρένο επανεισόδου είναι απαραίτητο: το setSession σε
+  // αποτυχία βγάζει κι αυτό 'SIGNED_OUT', που ξανακαλεί αυτή τη συνάρτηση.
+  const recoverSessionFromNative = async () => {
+    if (recoveringSession.current) return null;
+    recoveringSession.current = true;
+    try {
+      const native = readNativeTokens();
+      if (!native.accessToken || !native.refreshToken) return null;
+      const { data, error } = await supabase.auth.setSession({
+        access_token: native.accessToken,
+        refresh_token: native.refreshToken,
+      });
+      if (error || !data || !data.session) return null;
+      console.log('[auth] η σύνδεση ανακτήθηκε από τα tokens του native service');
+      return data.session;
+    } catch (_) {
+      return null;
+    } finally {
+      recoveringSession.current = false;
+    }
+  };
+
+  // Κλείσιμο συνεδρίας από ΔΙΚΗ ΜΑΣ απόφαση — ποτέ από αποτυχία token.
+  // `global`: ακυρώνει το session παντού (αποσύνδεση/μπλοκάρισμα από το κέντρο).
+  // Τοπικό scope όταν ο λογαριασμός συνεχίζει σε ΑΛΛΗ συσκευή: δεν την ρίχνουμε μαζί μας.
+  const endSession = async ({ global }) => {
+    await hardSignOut({ global });
+    setCurrentUser(null);
+  };
 
   useEffect(() => {
     if (!themeLoaded.current) return;
@@ -97,20 +138,42 @@ export default function App() {
       themeLoaded.current = true;
 
       myDeviceId.current = await getDeviceId();
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: sessionData } = await supabase.auth.getSession();
+      // Αν το token του JS είναι πια άκυρο (κλασικά: το native ανανέωνε μόνο του
+      // όσο η εφαρμογή ήταν σκοτωμένη), δοκιμάζουμε τα tokens του native ΠΡΙΝ
+      // δείξουμε οθόνη εισόδου.
+      const session = (sessionData && sessionData.session) || (await recoverSessionFromNative());
       if (session && session.user && session.user.id) {
-        const { data: driver } = await supabase.from('drivers').select('*').eq('id', session.user.id).single();
-        if (driver) {
-          // Ο λογαριασμός συνδέθηκε σε ΑΛΛΗ συσκευή όσο ήμασταν κλειστοί → όχι auto-login.
-          const supersededByOtherDevice =
-            driver.active_device_id && driver.active_device_id !== myDeviceId.current;
-          if (supersededByOtherDevice) {
-            await supabase.auth.signOut({ scope: 'local' });
-          } else if (driver.is_active === false || driver.is_blocked === true) {
-            await supabase.auth.signOut();
-          } else {
-            setCurrentUser(driver);
+        const { data: driver, error } = await supabase
+          .from('drivers').select('*').eq('id', session.user.id).maybeSingle();
+
+        if (error) {
+          // Δεν απάντησε η βάση (δίκτυο, timeout, 5xx). ΔΕΝ ξέρουμε τίποτα για
+          // τον λογαριασμό — άρα ΔΕΝ αποσυνδέουμε. Η άγνοια δεν είναι λόγος
+          // αποσύνδεσης· ήταν ακριβώς έτσι που «έβγαινε» μόνος του ο διανομέας.
+          // Μπαίνουμε με το τελευταίο γνωστό προφίλ, ΧΩΡΙΣ όμως να διεκδικήσουμε
+          // τη συσκευή: αν στο μεταξύ ο λογαριασμός πήγε αλλού, θα το μάθουμε από
+          // το πρώτο realtime update και θα αποσυνδεθούμε — δεν κλέβουμε εμείς
+          // τη θέση της νέας συσκευής επειδή τυχαία δεν είχαμε δίκτυο.
+          console.log('[auth] το προφίλ δεν φορτώθηκε, κρατάμε τη σύνδεση:', error.message);
+          const cached = await readCachedDriverProfile(session.user.id);
+          if (cached) {
+            deviceClaimAllowed.current = false;
+            setCurrentUser(cached);
           }
+        } else if (!driver) {
+          // Επιτυχές ερώτημα με μηδέν γραμμές → ο λογαριασμός δεν υπάρχει πια.
+          await endSession({ global: false });
+        } else if (driver.active_device_id && driver.active_device_id !== myDeviceId.current) {
+          // Ο λογαριασμός συνδέθηκε σε ΑΛΛΗ συσκευή όσο ήμασταν κλειστοί.
+          // Τοπικό scope: δεν ακυρώνουμε το session της νέας συσκευής.
+          await endSession({ global: false });
+        } else if (driver.is_active === false || driver.is_blocked === true) {
+          await endSession({ global: true });
+        } else {
+          deviceClaimAllowed.current = true;
+          setCurrentUser(driver);
+          cacheDriverProfile(driver);
         }
       }
       setIsInitializing(false);
@@ -119,10 +182,21 @@ export default function App() {
     restoreSession();
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT') {
-        supabase.removeAllChannels();
+      if (event !== 'SIGNED_OUT') return;
+      supabase.removeAllChannels();
+
+      // Ηθελημένη αποσύνδεση (διανομέας / admin / άλλη συσκευή) → τέλος.
+      if (consumeIntentionalSignOut()) {
         setCurrentUser(null);
+        return;
       }
+
+      // ΑΚΟΥΣΙΑ: το supabase-js έσβησε μόνο του το session επειδή απέτυχε η
+      // ανανέωση του token. Τελευταία ελπίδα πριν πετάξουμε τον διανομέα έξω.
+      if (await recoverSessionFromNative()) return;
+
+      Alert.alert('Η σύνδεση διακόπηκε', 'Παρακαλώ συνδεθείτε ξανά.');
+      setCurrentUser(null);
     });
 
     return () => {
@@ -135,6 +209,10 @@ export default function App() {
   //     και οι προηγούμενες συσκευές αυτο-αποσυνδέονται (βλ. status listener). ---
   useEffect(() => {
     if (!currentUser) return;
+    // Το τοπικό αντίγραφο του προφίλ: καλύπτει και τη σύνδεση από την οθόνη
+    // εισόδου, ώστε το επόμενο άνοιγμα να μπαίνει χωρίς να ρωτήσει τη βάση.
+    cacheDriverProfile(currentUser);
+    if (!deviceClaimAllowed.current) return;
     (async () => {
       try {
         const deviceId = await getDeviceId();
@@ -156,8 +234,7 @@ export default function App() {
           Alert.alert("Αποσύνδεση", msg);
           await clearDriverPresenceEverywhere(currentUser.id);
           supabase.removeAllChannels();
-          await supabase.auth.signOut();
-          setCurrentUser(null);
+          await endSession({ global: true });
         } else if (
           payload.new && payload.new.active_device_id &&
           myDeviceId.current && payload.new.active_device_id !== myDeviceId.current
@@ -167,8 +244,7 @@ export default function App() {
           // ώστε να ΜΗΝ ακυρωθεί το session της νέας συσκευής.
           Alert.alert("Αποσύνδεση", "Ο λογαριασμός σας συνδέθηκε σε άλλη συσκευή.");
           supabase.removeAllChannels();
-          await supabase.auth.signOut({ scope: 'local' });
-          setCurrentUser(null);
+          await endSession({ global: false });
         }
       })
       .subscribe();

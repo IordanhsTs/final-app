@@ -62,6 +62,7 @@ class VertexLocationService : Service() {
       val svc = instance ?: return
       if (!access.isNullOrEmpty()) svc.accessToken = access
       if (!refresh.isNullOrEmpty()) svc.refreshToken = refresh
+      VertexAuthStore.save(svc, access, refresh)
     }
   }
 
@@ -172,6 +173,9 @@ class VertexLocationService : Service() {
     if (driverId == null || supabaseUrl == null || anonKey == null) {
       stopSelf(); return START_NOT_STICKY
     }
+
+    // Ό,τι μας δίνει ο JS στην εκκίνηση είναι η νέα βάση της αλυσίδας tokens.
+    VertexAuthStore.save(this, accessToken, refreshToken)
 
     // Νέα συνεδρία χιλιομετρητή σε κάθε εκκίνηση: ο server τη χρησιμοποιεί για
     // να δεχτεί αρίθμηση που ξαναρχίζει από το 1 μετά από restart. Τα μέτρα που
@@ -337,6 +341,10 @@ class VertexLocationService : Service() {
       val json = JSONObject(resp)
       accessToken = json.optString("access_token", accessToken ?: "")
       refreshToken = json.optString("refresh_token", refreshToken ?: "")
+      // ΚΡΙΣΙΜΟ: το rotation μόλις ακύρωσε ό,τι κρατά ο JS στον δίσκο. Αν δεν
+      // γραφτεί ΕΔΩ το νέο ζευγάρι, η εφαρμογή θα ξυπνήσει με άκυρο token και
+      // θα πετάξει τον διανομέα έξω. Βλ. VertexAuthStore.
+      VertexAuthStore.save(this, accessToken, refreshToken)
       true
     } catch (e: Exception) {
       false
