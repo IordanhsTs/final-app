@@ -1,8 +1,15 @@
 import { StyleSheet } from 'react-native';
 
+// ΠΑΛΕΤΑ ΤΟΥ MOCKUP (πελάτης, 31/07/2026) — δύο ξεχωριστές έννοιες:
+//   • `surface` = ΣΚΟΥΡΕΣ επιφάνειες (header, μπάρες, μενού, modals, άδεια λίστα)
+//   • `card`    = ΑΣΠΡΕΣ κάρτες περιεχομένου (οι παραγγελίες)
+// Πριν ήταν και τα δύο `card`, γι' αυτό δεν μπορούσαν να διαφοροποιηθούν.
+// Στο σκούρο θέμα το φόντο είναι ΒΑΘΥ ΜΠΛΕ (όχι μαύρο) και οι κάρτες άσπρες:
+// αυτή είναι η βασική διαφορά από την προηγούμενη ταυτότητα «μαύρο + χρυσό γύρω».
 export const Colors = {
   light: {
     background: '#F8F5F0', // Base (60%)
+    surface: '#FFFFFF',
     card: '#FFFFFF',
     text: '#1E1A14', // Secondary (30%)
     subtitle: '#5C5248',
@@ -14,17 +21,40 @@ export const Colors = {
     accent: '#C5A066', // Accent (10%)
   },
   dark: {
-    background: '#0D0D0D', // Base (60%)
-    card: 'rgba(28, 28, 28, 0.95)', // Glass effect over deep background
-    text: '#F0EBE2', // Secondary (30%)
-    subtitle: '#A89C8E',
-    border: '#2A2520',
-    inputBg: '#111111',
-    toggleBg: '#221E1A',
-    commentBg: '#111111',
+    background: '#0B1020', // Βαθύ navy αντί για μαύρο — πιο σκούρο (σημείο αναφοράς πελάτη 31/07/2026)
+    surface: '#1B2338',    // Header / μπάρες / μενού / modals
+    card: '#FFFFFF',       // Οι κάρτες παραγγελιών είναι ΑΣΠΡΕΣ
+    text: '#F0EBE2',       // Κείμενο ΠΑΝΩ στο navy (όχι μέσα στην κάρτα)
+    subtitle: '#93A0B8',
+    border: '#2A3348',
+    inputBg: '#1B2338',
+    toggleBg: '#222C44',
+    commentBg: '#F3F4F6',
     acceptedBg: 'rgba(34,197,94,0.08)',
     accent: '#D4A853', // Bright Gold Accent for dark mode
   }
+};
+
+// Χρώματα ΜΕΣΑ στην άσπρη κάρτα. Η κάρτα είναι άσπρη και στα δύο θέματα, οπότε
+// το περιεχόμενό της ΔΕΝ εξαρτάται από το isDarkMode — γι' αυτό είναι σταθερές.
+export const CardColors = {
+  text: '#1A1D29',    // κύριο κείμενο (διεύθυνση παράδοσης)
+  muted: '#6B7280',   // δευτερεύον (διεύθυνση καταστήματος, σχόλια)
+  faint: '#9CA3AF',   // ετικέτες τμημάτων (ΠΑΡΑΔΟΣΗ / ΣΧΟΛΙΑ)
+  divider: '#EDEFF3',
+  chipBg: '#F3F4F6',
+  chipText: '#6B7280',
+  iconBg: '#F3F4F6',
+  icon: '#374151',
+  gold: '#C5A066',    // εικονίδιο καταστήματος
+  numberBg: '#F5E9D3',
+  numberText: '#8A6D2F',
+  okBg: '#E7F8EF',
+  okText: '#0E9F6E',
+  warnBg: '#FEE9E9',
+  warnText: '#DC2626',
+  cardBg: '#E8F1FE',
+  cardText: '#1D74D0',
 };
 
 export const getStyles = (isDark) => {
@@ -33,21 +63,21 @@ export const getStyles = (isDark) => {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.background, paddingTop: 40 },
     containerCenter: { flex: 1, backgroundColor: theme.background, justifyContent: 'center' },
-    header: { flexDirection: 'row', padding: 15, backgroundColor: theme.card, justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderColor: theme.border },
+    header: { flexDirection: 'row', padding: 15, backgroundColor: theme.surface, justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderColor: theme.border },
     title: { fontSize: 32, textAlign: 'center', marginBottom: 20, color: theme.text },
     
     roleToggle: { flexDirection: 'row', marginHorizontal: 20, marginBottom: 20, backgroundColor: theme.toggleBg, borderRadius: 10, overflow: 'hidden' },
     toggleBtn: { flex: 1, padding: 15, alignItems: 'center' },
     toggleText: { fontSize: 16, color: theme.subtitle },
-    toggleBtnActive: { backgroundColor: theme.card, borderRadius: 8, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3 },
+    toggleBtnActive: { backgroundColor: theme.surface, borderRadius: 8, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3 },
     toggleTextActive: { fontWeight: 'bold' },
     
-    input: { margin: 20, padding: 15, backgroundColor: theme.card, borderRadius: 10, borderWidth: 1, borderColor: theme.border, color: theme.text },
+    input: { margin: 20, padding: 15, backgroundColor: theme.surface, borderRadius: 10, borderWidth: 1, borderColor: theme.border, color: theme.text },
     button: { margin: 20, padding: 15, backgroundColor: isDark ? '#444' : '#333', borderRadius: 10, alignItems: 'center' },
     buttonTextWhite: { color: '#FFF', fontWeight: 'bold' },
     
     storeName: { fontWeight: 'bold', color: '#E53935', fontSize: 18 },
-    formCard: { backgroundColor: theme.card, margin: 10, padding: 15, borderRadius: 10 },
+    formCard: { backgroundColor: theme.surface, margin: 10, padding: 15, borderRadius: 10 },
     
     inputSmall: { backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.border, borderRadius: 5, padding: 10, marginBottom: 10, color: theme.text },
     paymentToggleContainer: { flexDirection: 'row', marginBottom: 10, gap: 10 },
@@ -58,22 +88,25 @@ export const getStyles = (isDark) => {
     
     submitBtn: { backgroundColor: '#E53935', padding: 12, borderRadius: 5, alignItems: 'center' },
     
-    orderCard: { 
-      backgroundColor: isDark ? 'rgba(20, 20, 20, 0.9)' : theme.card, 
-      padding: 20, 
-      marginHorizontal: 16, 
-      marginVertical: 10, 
-      borderRadius: 22, 
-      elevation: 8,
-      shadowColor: isDark ? '#C5A066' : '#000', 
-      shadowOffset: { width: 0, height: 6 }, 
-      shadowOpacity: 0.25, 
+    // ΑΣΠΡΗ κάρτα πάνω στο navy — και στα δύο θέματα (mockup πελάτη 31/07/2026).
+    // Το χρυσό περίγραμμα με το glow έφυγε: πάνω σε άσπρο δεν έχει τι να φωτίσει,
+    // και η κάρτα ξεχωρίζει από μόνη της με τη σκιά.
+    // Πιο σφιχτό padding/κενό μαζί με τη συγχώνευση «ΠΑΡΑΔΟΣΗ + ετικέτες» σε μία
+    // γραμμή, ώστε να χωράνε περισσότερες παραγγελίες στην οθόνη.
+    orderCard: {
+      backgroundColor: theme.card,
+      padding: 16,
+      marginHorizontal: 16,
+      marginVertical: 8,
+      borderRadius: 22,
+      elevation: 4,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.35 : 0.12,
       shadowRadius: 10,
-      borderWidth: 1,
-      borderColor: isDark ? '#C5A066' : theme.border
     },
-    tabActiveDarkDriver: { backgroundColor: theme.toggleBg, borderRadius: 12, borderWidth: 1, borderColor: theme.accent, shadowColor: theme.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 2 },
-    tabActiveLightDriver: { backgroundColor: theme.card, borderRadius: 12, borderWidth: 1, borderColor: theme.accent, shadowColor: theme.accent, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 2 },
+    // (Τα παλιά tabActiveDarkDriver/tabActiveLightDriver αφαιρέθηκαν: η ενεργή
+    //  καρτέλα ζωγραφίζεται πλέον με LinearGradient μέσα στο DriverDashboard.)
     tabTextActiveDriver: { color: theme.accent, fontWeight: '900', letterSpacing: 1 },
     premiumButtonWrapper: { marginTop: 12, borderRadius: 12, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
     premiumButtonBackground: { height: 50, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
@@ -91,7 +124,7 @@ export const getStyles = (isDark) => {
     logoutText: { color: 'red', fontWeight: 'bold' },
     driverName: { fontWeight: 'bold', color: theme.accent },
     
-    tabContainer: { flexDirection: 'row', backgroundColor: theme.card, borderBottomWidth: 1, borderColor: theme.border },
+    tabContainer: { flexDirection: 'row', backgroundColor: theme.surface, borderBottomWidth: 1, borderColor: theme.border },
     tab: { flex: 1, padding: 15, alignItems: 'center' },
     tabText: { color: theme.subtitle },
     activeTabText: { fontWeight: 'bold', color: theme.accent },
@@ -102,7 +135,7 @@ export const getStyles = (isDark) => {
     // Menu & History Modal
     // Το μενού ανοίγει ΑΡΙΣΤΕΡΑ, κάτω από το hamburger που μετακόμισε εκεί.
     menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-start', alignItems: 'flex-start' },
-    menuContent: { width: 230, backgroundColor: theme.card, marginTop: 60, marginLeft: 15, borderRadius: 12, padding: 10, elevation: 8, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 6 },
+    menuContent: { width: 230, backgroundColor: theme.surface, marginTop: 60, marginLeft: 15, borderRadius: 12, padding: 10, elevation: 8, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 6 },
     menuItem: { paddingVertical: 18, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: theme.border },
     menuItemText: { fontSize: 17, color: theme.text, fontWeight: '700' },
     
@@ -115,7 +148,7 @@ export const getStyles = (isDark) => {
     filterBtnText: { color: theme.text, fontSize: 14, fontWeight: '600' },
     filterBtnTextActive: { color: '#FFF', fontWeight: '900' },
     statRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, gap: 10 },
-    statBox: { flex: 1, backgroundColor: theme.card, padding: 15, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: theme.border, elevation: 2 },
+    statBox: { flex: 1, backgroundColor: theme.surface, padding: 15, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: theme.border, elevation: 2 },
     statValue: { fontSize: 24, fontWeight: '900', color: theme.accent, marginVertical: 5 },
     statLabel: { fontSize: 13, color: theme.subtitle, textAlign: 'center', fontWeight: '700' },
     tableRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.border },
@@ -124,7 +157,7 @@ export const getStyles = (isDark) => {
     
     // Custom Alert Modal
     alertModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-    alertModalContainer: { width: '80%', backgroundColor: theme.card, borderRadius: 16, padding: 20, elevation: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, borderWidth: 1, borderColor: theme.border },
+    alertModalContainer: { width: '80%', backgroundColor: theme.surface, borderRadius: 16, padding: 20, elevation: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, borderWidth: 1, borderColor: theme.border },
     alertModalTitle: { fontSize: 20, fontWeight: '900', color: theme.text, marginBottom: 10, textAlign: 'center' },
     alertModalMessage: { fontSize: 16, color: theme.subtitle, textAlign: 'center', marginBottom: 20 },
     alertModalButtonContainer: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },

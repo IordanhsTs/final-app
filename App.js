@@ -10,6 +10,7 @@ import { startNativeTracking, stopNativeTracking, ensureBatteryExemption, update
 // Εισαγωγή των Οθονών
 import LoginScreen from './src/screens/LoginScreen';
 import DriverDashboard from './src/screens/DriverDashboard';
+import { Colors } from './src/styles/globalStyles';
 
 // ─── Ρύθμιση notification handler (για foreground notifications) ──────────────
 // Ο ήχος παίζεται ΜΟΝΟ μέσω FCM push notification (channel orders_urgent_v3).
@@ -48,11 +49,24 @@ async function getDeviceId() {
 }
 
 export default function App() {
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  // ΠΡΟΕΠΙΛΟΓΗ ΣΚΟΥΡΟ: αυτή είναι η ταυτότητα της εφαρμογής (navy + χρυσό).
+  // Πριν ήταν `false`, δηλαδή σε κάθε κρύα εκκίνηση ο διανομέας έβρισκε ανοιχτό
+  // θέμα και ξανάκανε την ίδια εναλλαγή — δεν φαινόταν μόνο επειδή η οθόνη
+  // εισόδου αγνοούσε τελείως το θέμα.
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [backendVersion, setBackendVersion] = useState(0);
   const myDeviceId = useRef(null);
+  // Γίνεται true ΜΟΛΙΣ διαβαστεί η αποθηκευμένη επιλογή. Χωρίς αυτό, το effect
+  // παρακάτω θα έγραφε την προεπιλογή πάνω στην αποθηκευμένη τιμή πριν προλάβει
+  // να φορτωθεί, και η επιλογή του διανομέα θα χανόταν σε κάθε εκκίνηση.
+  const themeLoaded = useRef(false);
+
+  useEffect(() => {
+    if (!themeLoaded.current) return;
+    AsyncStorage.setItem('vertex-dark-mode', isDarkMode ? '1' : '0').catch(() => {});
+  }, [isDarkMode]);
 
   // --- FAILOVER: όταν αλλάξει backend, ξανατρέχουν τα effects (channels, GPS) ---
   useEffect(() => {
@@ -73,6 +87,15 @@ export default function App() {
   // --- AUTH SESSION MANAGEMENT (AUTO-LOGIN) ---
   useEffect(() => {
     async function restoreSession() {
+      // ΕΔΩ και όχι σε δικό του effect: το isInitializing κρατά την οθόνη στο
+      // spinner, οπότε το θέμα προλαβαίνει να φορτώσει πριν ζωγραφιστεί
+      // οτιδήποτε — αλλιώς θα άναβε μια στιγμή με λάθος χρώματα.
+      try {
+        const stored = await AsyncStorage.getItem('vertex-dark-mode');
+        if (stored !== null) setIsDarkMode(stored === '1');
+      } catch (_) {}
+      themeLoaded.current = true;
+
       myDeviceId.current = await getDeviceId();
       const { data: { session } } = await supabase.auth.getSession();
       if (session && session.user && session.user.id) {
@@ -341,9 +364,11 @@ export default function App() {
   }, [currentUser, backendVersion]);
 
   if (isInitializing) {
+    // Με φόντο θέματος — αλλιώς η εκκίνηση άναβε λευκή πριν εμφανιστεί το navy.
+    const splash = Colors[isDarkMode ? 'dark' : 'light'];
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#C5A066" />
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: splash.background }}>
+        <ActivityIndicator size="large" color={splash.accent} />
       </View>
     );
   }

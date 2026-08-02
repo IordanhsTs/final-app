@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View, Alert, Platform, StyleSheet, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../../supabase';
+import { Colors } from '../styles/globalStyles';
 
-export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode }) {
-  const styles = createStyles();
+export default function LoginScreen({ setCurrentUser, isDarkMode }) {
+  // Η οθόνη είχε ΚΑΡΦΩΤΑ μαύρο/χρυσό styles και δεν διάβαζε καθόλου το
+  // globalStyles — γι' αυτό είχε μείνει εκτός της αλλαγής παλέτας (navy + χρυσό)
+  // και ήταν η μόνη οθόνη με διαφορετική ταυτότητα. Τώρα παίρνει τα ίδια tokens.
+  const theme = Colors[isDarkMode ? 'dark' : 'light'];
+  const styles = createStyles(theme, isDarkMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -63,8 +69,15 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
             <Text style={styles.subtitle}>PREMIUM DELIVERY NETWORK</Text>
           </View>
 
-          {/* Login Card Wrapper for Light Rift Effect */}
-          <View style={styles.cardWrapper}>
+          {/* Το χρυσό περίγραμμα είναι GRADIENT, όπως στην ενεργή καρτέλα του
+              dashboard — έτσι οι δύο οθόνες μοιράζονται την ίδια χειρονομία αντί
+              για ένα επίπεδο χρυσό πλαίσιο που δεν θύμιζε τίποτα άλλο. */}
+          <LinearGradient
+            colors={[theme.accent, isDarkMode ? 'rgba(212,168,83,0.18)' : 'rgba(197,160,102,0.22)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.cardWrapper}
+          >
             <View style={styles.card}>
 
               {/* Form Inputs */}
@@ -72,8 +85,8 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
                 <Text style={styles.inputLabel}>EMAIL</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="name@example.com" 
-                  placeholderTextColor="#8A7347"
+                  placeholder="name@example.com"
+                  placeholderTextColor={theme.subtitle}
                   keyboardType="email-address" 
                   onChangeText={setEmail} 
                   autoCapitalize="none"
@@ -86,8 +99,8 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
                 <Text style={styles.inputLabel}>ΚΩΔΙΚΟΣ ΠΡΟΣΒΑΣΗΣ</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="Εισάγετε τον κωδικό σας" 
-                  placeholderTextColor="#8A7347"
+                  placeholder="Εισάγετε τον κωδικό σας"
+                  placeholderTextColor={theme.subtitle}
                   secureTextEntry={true}
                   onChangeText={setPassword} 
                   autoCapitalize="none"
@@ -97,8 +110,8 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
               </View>
 
               {/* Submit Button */}
-              <TouchableOpacity 
-                style={styles.buttonWrapper} 
+              <TouchableOpacity
+                style={[styles.buttonWrapper, loading && { opacity: 0.6 }]}
                 onPress={handleLogin}
                 disabled={loading}
                 activeOpacity={0.8}
@@ -107,9 +120,9 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
                   <Text style={styles.buttonText}>{loading ? 'ΓΙΝΕΤΑΙ ΣΥΝΔΕΣΗ...' : 'ΕΙΣΟΔΟΣ'}</Text>
                 </View>
               </TouchableOpacity>
-              
+
             </View>
-          </View>
+          </LinearGradient>
 
         </View>
       </TouchableWithoutFeedback>
@@ -117,10 +130,10 @@ export default function LoginScreen({ setCurrentUser, isDarkMode, setIsDarkMode 
   );
 }
 
-const createStyles = () => StyleSheet.create({
+const createStyles = (theme, isDark) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#121212', // Πολύ σκούρο charcoal / ματ μαύρο
+    backgroundColor: theme.background, // βαθύ navy (dark) / κρεμ (light)
   },
   inner: {
     flex: 1,
@@ -134,33 +147,33 @@ const createStyles = () => StyleSheet.create({
   title: {
     fontSize: 48,
     fontWeight: '900',
-    color: '#C5A066', // Χρυσό / Μπρούντζο
+    color: theme.accent,
     letterSpacing: 4,
     textTransform: 'uppercase',
-    textShadowColor: '#C5A06680',
+    // Η λάμψη έχει νόημα μόνο πάνω στο σκούρο· στο κρεμ θόλωνε τα γράμματα.
+    textShadowColor: isDark ? 'rgba(212,168,83,0.45)' : 'transparent',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 10,
   },
   subtitle: {
     fontSize: 12,
-    color: '#A0A0A0',
+    color: theme.subtitle,
     marginTop: 8,
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
   cardWrapper: {
     borderRadius: 24,
-    padding: 2, // Πάχος για το glowing border effect (Ρήγμα φωτός)
-    backgroundColor: '#C5A066',
-    shadowColor: '#C5A066',
+    padding: 1.5, // πάχος του gradient περιγράμματος
+    shadowColor: theme.accent,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
+    shadowOpacity: isDark ? 0.5 : 0.25,
     shadowRadius: 15,
     elevation: 10,
   },
   card: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 22,
+    backgroundColor: theme.surface,
+    borderRadius: 22.5,
     padding: 24,
   },
   inputContainer: {
@@ -169,39 +182,44 @@ const createStyles = () => StyleSheet.create({
   inputLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#C5A066',
+    color: theme.accent,
     marginBottom: 8,
     marginLeft: 4,
     letterSpacing: 1.5,
   },
   input: {
     height: 56,
-    backgroundColor: 'transparent',
+    // ΟΧΙ διάφανο με χρυσό περίγραμμα (όπως πριν): πάνω στο navy το πεδίο
+    // εξαφανιζόταν μέσα στην κάρτα. Χρειάζεται δική του, ανοιχτότερη επιφάνεια —
+    // στο σκούρο η `surface` ΤΑΥΤΙΖΕΤΑΙ με την κάρτα, γι' αυτό `toggleBg`.
+    backgroundColor: isDark ? theme.toggleBg : theme.inputBg,
     borderWidth: 1,
-    borderColor: '#C5A066',
+    borderColor: theme.border,
     borderRadius: 12,
     paddingHorizontal: 16,
     fontSize: 16,
-    color: '#EAD7B1',
+    color: theme.text,
   },
   buttonWrapper: {
     marginTop: 16,
     borderRadius: 12,
-    shadowColor: '#C5A066',
+    shadowColor: theme.accent,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 10,
     elevation: 5,
   },
   buttonBackground: {
-    backgroundColor: '#C5A066',
+    backgroundColor: theme.accent,
     height: 56,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
   buttonText: {
-    color: '#121212',
+    // Σκούρο κείμενο ΠΑΝΩ στο χρυσό — και στα δύο θέματα. Το `theme.background`
+    // του ανοιχτού είναι κρεμ και θα ήταν αδιάβαστο εδώ.
+    color: isDark ? theme.background : theme.text,
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 2,

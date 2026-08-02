@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, FlatList, ScrollView, RefreshControl, Vibration, Linking, Platform, AppState, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, ScrollView, RefreshControl, Vibration, Linking, Platform, AppState, Modal, Image, Animated, Easing } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import { formatKm, formatCountdown, orderDurations, minutesSinceCreated } from '../utils/orderInfo';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -7,17 +7,24 @@ import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, onBackendChange } from '../../supabase';
-import { getStyles } from '../styles/globalStyles';
+import { getStyles, Colors, CardColors } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const notificationSound = require('../../assets/notification.mp3');
 const alarmSound = require('../../assets/assignment.wav');
 const messageSound = require('../../assets/message.wav');
 
+const emptyOrdersDark = require('../../assets/empty_orders_dark.png');
+const emptyOrdersLight = require('../../assets/empty_orders_light.png');
+
 
 
 export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMode, setIsDarkMode }) {
   const styles = getStyles(isDarkMode);
+  // Οι σκούρες επιφάνειες (header, μπάρες, modals) παίρνουν χρώμα από την παλέτα
+  // αντί για καρφωτά greys — αλλιώς έμεναν μαύρες πάνω στο νέο navy φόντο.
+  const theme = Colors[isDarkMode ? 'dark' : 'light'];
 
   // ΤΑ HOOKS ΜΠΑΙΝΟΥΝ ΑΥΣΤΗΡΑ ΕΔΩ ΣΤΗΝ ΚΟΡΥΦΗ!
   // Τρεις ξεχωριστοί players — ένας ανά είδος ειδοποίησης (νέα παραγγελία / ανάθεση
@@ -89,6 +96,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [systemAlert, setSystemAlert] = useState(null);
   const [lastLocationUpdate, setLastLocationUpdate] = useState("Περιμένω στίγμα...");
   const [locationPermStatus, setLocationPermStatus] = useState('...');
+  // Πράσινη/κόκκινη κουκκίδα δίπλα στο «Στίγμα»: πράσινη όσο φτάνουν φρέσκα GPS
+  // updates (το native service στέλνει κάθε 10"), κόκκινη αν περάσει το όριο
+  // χωρίς νέο — σημάδι ότι κάτι κόλλησε (άδεια τοποθεσίας, νεκρό service, δίκτυο).
+  const [locationOk, setLocationOk] = useState(false);
+  const lastLocationUpdateAt = useRef(0);
 
   // READ-ONLY-ON-FAILOVER: μπάρα + κλείδωμα ενεργειών όταν τρέχουμε στο εφεδρικό
   // (standby). Ενημερώνεται σε κάθε αλλαγή backend (το switchTo δεν κάνει reload).
@@ -226,6 +238,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       .on('postgres_changes', { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` }, (payload) => {
         if (payload.new.latitude && payload.new.longitude) {
           const now = new Date();
+          lastLocationUpdateAt.current = now.getTime();
+          setLocationOk(true);
           setLastLocationUpdate(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
         }
       })
@@ -249,6 +263,53 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     const t = setInterval(() => setNow(new Date()), everySecond ? 1000 : 60000);
     return () => clearInterval(t);
   }, [scheduledOrders.length]);
+
+  // Ελέγχει ανεξάρτητα (κάθε 5") αν το τελευταίο GPS update είναι ακόμα φρέσκο —
+  // ξεχωριστό από το ρολόι πάνω, που σε ήσυχες στιγμές χτυπά μόνο ανά λεπτό και
+  // θα άργαγε πολύ να δείξει «κόκκινο» αν κολλήσει το στίγμα.
+  useEffect(() => {
+    const STALE_MS = 30000;
+    const t = setInterval(() => {
+      const last = lastLocationUpdateAt.current;
+      setLocationOk(!!last && Date.now() - last <= STALE_MS);
+    }, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── Παλμοί «διαθεσιμότητας» στην άδεια λίστα ───────────────────────────────
+  // Τρεις ομόκεντροι κύκλοι που ξεδιπλώνονται από το στίγμα του διανομέα. Είναι
+  // ΣΚΕΤΟΙ ΚΥΚΛΟΙ (Animated.View + borderRadius), όχι SVG: το react-native-svg
+  // θα απαιτούσε νέο native build, ενώ έτσι όλο το εφέ φεύγει με eas update.
+  // Ο χάρτης από κάτω παραμένει PNG.
+  const pulses = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+
+  // ΤΡΕΧΕΙ ΜΟΝΟ ΟΣΟ ΦΑΙΝΕΤΑΙ ΤΟ ΑΔΕΙΟ ΠΛΑΙΣΙΟ. Η εφαρμογή ζει όλη τη βάρδια στο
+  // κινητό του διανομέα — δεν αφήνουμε animation να γυρίζει από κάτω ενώ η οθόνη
+  // δείχνει παραγγελίες.
+  const showingEmpty = activeTab === 'pending'
+    ? (pendingOrders.length + scheduledOrders.length) === 0
+    : myOrders.length === 0;
+
+  useEffect(() => {
+    if (!showingEmpty) return;
+    // Το Animated.loop μηδενίζει μόνο του την τιμή σε κάθε επανάληψη, οπότε το
+    // stagger μπαίνει ΜΙΑ φορά στην εκκίνηση (αν έμπαινε μέσα στο loop ως delay,
+    // θα ξαναπερίμενε σε κάθε κύκλο και οι παλμοί θα «κόμπιαζαν»).
+    const loops = pulses.map((v) => Animated.loop(
+      Animated.timing(v, {
+        toValue: 1,
+        duration: 3600,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      })
+    ));
+    const timers = loops.map((l, i) => setTimeout(() => l.start(), i * 1200));
+    return () => {
+      timers.forEach(clearTimeout);
+      loops.forEach((l) => l.stop());
+      pulses.forEach((v) => v.setValue(0));
+    };
+  }, [showingEmpty]);
 
   // ── Ηχητικοί συναγερμοί ────────────────────────────────────────────────────
   // Χρησιμοποιούμε το `loop` του expo-audio αντί για setInterval με seekTo: ο ήχος
@@ -622,49 +683,70 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     const navLon = toStore ? item.store_longitude : item.longitude;
 
     // Χρώματα χρόνου: Πράσινο μέχρι 9 λεπτά, Κόκκινο από 10 και πάνω. Ολοκληρωμένες πάντα πράσινες.
+    // Πλέον ΔΕΝ εξαρτώνται από το θέμα — η κάρτα είναι άσπρη και στα δύο.
     const isWarning = !isCompleted && !isScheduled && mins > 9;
-    const timeColor = isWarning ? '#EF4444' : '#10B981';
-    const timeBgColor = isWarning
-      ? (isDarkMode ? '#3a1e1e' : '#FFEBEE')
-      : (isDarkMode ? '#1e3a24' : '#E8F5E9');
+    const timeColor = isWarning ? CardColors.warnText : CardColors.okText;
+    const timeBgColor = isWarning ? CardColors.warnBg : CardColors.okBg;
 
     const remainingMs = item.scheduled_at ? new Date(item.scheduled_at) - now : 0;
     const km = formatKm(item.distance_km);
 
-    return (
-      <View style={[styles.orderCard, isScheduled && { opacity: 0.9, borderStyle: 'dashed', borderWidth: 1, borderColor: isDarkMode ? '#444' : '#D1D5DB' }]}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB', paddingBottom: 10 }}>
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-            {/* Αύξων αριθμός θέσης μέσα στη λίστα */}
-            <View style={{ minWidth: 22, height: 22, borderRadius: 6, backgroundColor: isDarkMode ? '#2A2A2A' : '#EEF0F3', alignItems: 'center', justifyContent: 'center', marginRight: 8, paddingHorizontal: 4 }}>
-              <Text style={{ fontSize: 12, fontWeight: '900', color: isDarkMode ? '#9CA3AF' : '#6B7280' }}>{displayNumber}</Text>
-            </View>
-            <Text style={{ fontWeight: '900', fontSize: 17, color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1, letterSpacing: 0.5 }} numberOfLines={1}>
-              <Ionicons name="storefront-outline" size={16} color={isDarkMode ? '#C5A066' : '#8A7347'} /> {item.store_name}
-            </Text>
+    // Στρογγυλό κουμπί ενέργειας (τηλέφωνο / πλοήγηση) όπως στο mockup. Μίκρυνε
+    // από 38 σε 34 όταν όλα μπήκαν σε μία γραμμή — αλλιώς η σειρά ψήλωνε άσκοπα.
+    const roundBtn = { width: 34, height: 34, borderRadius: 17, backgroundColor: CardColors.iconBg, alignItems: 'center', justifyContent: 'center' };
 
-            {/* Το τηλέφωνο ανήκει στο ΟΝΟΜΑ, γι' αυτό κάθεται δίπλα του και όχι
-                στη δεξιά ομάδα: κολλητά στην πλοήγηση πατιόταν κατά λάθος. */}
-            {item.store_phone ? (
-              <TouchableOpacity onPress={() => handleCall(item.store_phone, item.store_name)} style={{ marginLeft: 8, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}>
-                <Feather name="phone-call" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
-              </TouchableOpacity>
+    return (
+      <View style={[styles.orderCard, isScheduled && { opacity: 0.92, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB' }]}>
+        {/* ── ΠΑΡΑΛΑΒΗ: κατάστημα + η διεύθυνσή του από κάτω ──
+            Η διεύθυνση του καταστήματος ανέβηκε ΕΔΩ (κάτω από το όνομα, όπου ανήκει)
+            και δεν κάθεται πια κάτω από τη διεύθυνση του πελάτη — έτσι η κάρτα
+            χωρίζεται καθαρά σε «από πού» και «πού». */}
+        {/* ΟΛΑ ΣΕ ΜΙΑ ΓΡΑΜΜΗ (αίτημα πελάτη 02/08/2026): τηλέφωνο κολλητά στο
+            όνομα, πλοήγηση + χρόνος μαζί δεξιά. Πριν, τα δύο κουμπιά και ο χρόνος
+            ήταν δύο ξεχωριστές σειρές δεξιά και ψήλωναν την κάρτα.
+            Η πλοήγηση δοκιμάστηκε και στο κέντρο (space-between) αλλά έμοιαζε
+            ξεκάρφωτη — χωρίς γείτονα δεν διαβαζόταν ως ομάδα. */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12, borderBottomWidth: 1, borderBottomColor: CardColors.divider, paddingBottom: 12 }}>
+          <View style={{ flexShrink: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {/* Αύξων αριθμός θέσης μέσα στη λίστα */}
+              <View style={{ minWidth: 24, height: 24, borderRadius: 8, backgroundColor: CardColors.numberBg, alignItems: 'center', justifyContent: 'center', marginRight: 9, paddingHorizontal: 5 }}>
+                <Text style={{ fontSize: 12, fontWeight: '900', color: CardColors.numberText }}>{displayNumber}</Text>
+              </View>
+              <Text style={{ fontWeight: '900', fontSize: 18, color: CardColors.text, flexShrink: 1, letterSpacing: 0.2 }} numberOfLines={1}>
+                <Ionicons name="storefront-outline" size={17} color={CardColors.gold} /> {item.store_name}
+              </Text>
+              {item.store_phone ? (
+                <TouchableOpacity
+                  onPress={() => handleCall(item.store_phone, item.store_name)}
+                  style={[roundBtn, { marginLeft: 8 }]}
+                  accessibilityLabel="Κλήση καταστήματος"
+                >
+                  <Feather name="phone-call" size={16} color={CardColors.icon} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {item.store_address ? (
+              <Text style={{ fontSize: 13, color: CardColors.muted, marginTop: 6, marginLeft: 33 }} numberOfLines={1}>
+                <Feather name="map-pin" size={12} color={CardColors.muted} /> {item.store_address}
+              </Text>
             ) : null}
           </View>
 
-          {/* Δεξιά ομάδα: ΠΛΟΗΓΗΣΗ + χρόνος */}
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {!isScheduled && (
               <TouchableOpacity
                 onPress={() => openNavigation(navTarget, toStore, navLat, navLon)}
-                style={{ marginLeft: 6, padding: 6, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', borderRadius: 12 }}
+                style={roundBtn}
                 accessibilityLabel="Πλοήγηση"
               >
-                <Feather name="navigation" size={18} color={isDarkMode ? '#EAD7B1' : '#121212'} />
+                <Feather name="navigation" size={16} color={CardColors.icon} />
               </TouchableOpacity>
             )}
-            <View style={{ backgroundColor: isScheduled ? (isDarkMode ? '#262626' : '#F3F4F6') : timeBgColor, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, justifyContent: 'center', marginLeft: 6 }}>
-              <Text style={{ color: isScheduled ? (isDarkMode ? '#9CA3AF' : '#6B7280') : timeColor, fontWeight: '900', fontSize: 13 }}>
+
+            <View style={{ backgroundColor: isScheduled ? CardColors.chipBg : timeBgColor, paddingHorizontal: 11, paddingVertical: 5, borderRadius: 10 }}>
+              <Text style={{ color: isScheduled ? CardColors.chipText : timeColor, fontWeight: '900', fontSize: 13 }}>
                 {isScheduled
                   ? formatCountdown(remainingMs)
                   : isCompleted
@@ -675,44 +757,57 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           </View>
         </View>
 
-        <Text style={[styles.orderAddress, { color: isDarkMode ? '#EAD7B1' : '#1F2937', fontSize: 17, marginBottom: 6 }]}>{item.address}</Text>
+        {/* ── ΠΑΡΑΔΟΣΗ ──
+            Η ετικέτα και οι μικρές πληροφορίες (τρόπος πληρωμής / απόσταση /
+            ΠΑΡΕΛΗΦΘΗ) μοιράζονται ΤΗΝ ΙΔΙΑ γραμμή — αίτημα πελάτη 31/07/2026:
+            έτσι η κάρτα χαμηλώνει κατά μία ολόκληρη σειρά και χωράνε
+            περισσότερες παραγγελίες στην οθόνη. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 7 }}>
+          <Text style={{ fontSize: 11, fontWeight: '900', letterSpacing: 1.4, color: CardColors.faint }}>ΠΑΡΑΔΟΣΗ</Text>
 
-        {/* Διεύθυνση καταστήματος αποστολής — μικρά γράμματα, από κάτω */}
-        {item.store_address ? (
-          <Text style={{ fontSize: 12, color: isDarkMode ? '#8A8A8A' : '#6B7280', marginBottom: 8 }} numberOfLines={1}>
-            <Feather name="corner-up-right" size={11} /> Από: {item.store_address}
-          </Text>
-        ) : null}
-
-        {/* Μικρές πληροφοριακές ετικέτες: τρόπος πληρωμής + απόσταση */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: item.comments ? 10 : 4 }}>
-          {item.payment_method ? (
-            <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
-              <Text style={{ fontWeight: '800', color: '#FFF', fontSize: 10, letterSpacing: 0.5 }}>
-                {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
-              </Text>
-            </View>
-          ) : null}
-          {km ? (
-            <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
-              <Feather name="map-pin" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
-              <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{km}</Text>
-            </View>
-          ) : null}
-          {pickedUp && !isCompleted ? (
-            <View style={{ backgroundColor: isDarkMode ? '#1e3a24' : '#E8F5E9', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
-              <Text style={{ fontWeight: '800', color: '#10B981', fontSize: 10 }}>ΠΑΡΕΛΗΦΘΗ</Text>
-            </View>
-          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, flexShrink: 1 }}>
+            {item.payment_method ? (
+              <View style={{
+                backgroundColor: item.payment_method === 'cash' ? CardColors.okBg : CardColors.cardBg,
+                paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8,
+              }}>
+                <Text style={{ fontWeight: '900', color: item.payment_method === 'cash' ? CardColors.okText : CardColors.cardText, fontSize: 10, letterSpacing: 0.6 }}>
+                  {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
+                </Text>
+              </View>
+            ) : null}
+            {km ? (
+              <View style={{ backgroundColor: CardColors.chipBg, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8, flexDirection: 'row', alignItems: 'center' }}>
+                <Feather name="map-pin" size={10} color={CardColors.chipText} />
+                <Text style={{ fontWeight: '900', color: CardColors.chipText, fontSize: 10, marginLeft: 3 }}>{km}</Text>
+              </View>
+            ) : null}
+            {pickedUp && !isCompleted ? (
+              <View style={{ backgroundColor: CardColors.okBg, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 }}>
+                <Text style={{ fontWeight: '900', color: CardColors.okText, fontSize: 10 }}>ΠΑΡΕΛΗΦΘΗ</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
-        {item.comments ? <Text style={[styles.commentText, { fontSize: 14, padding: 8, backgroundColor: isDarkMode ? '#222' : '#F3F4F6', color: isDarkMode ? '#A0A0A0' : '#4B5563' }]}><Feather name="message-square" size={12} /> {item.comments}</Text> : null}
+        <Text style={[styles.orderAddress, { color: CardColors.text, fontSize: 18, marginBottom: 0 }]}>
+          <Feather name="map-pin" size={15} color={CardColors.text} /> {item.address}
+        </Text>
+
+        {item.comments ? (
+          <View style={{ marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: CardColors.chipBg }}>
+            <Text style={{ fontSize: 10, fontWeight: '900', letterSpacing: 1.2, color: CardColors.faint, marginBottom: 4 }}>
+              <Feather name="message-square" size={10} color={CardColors.faint} /> ΣΧΟΛΙΑ
+            </Text>
+            <Text style={{ fontSize: 14, color: CardColors.muted }}>{item.comments}</Text>
+          </View>
+        ) : null}
 
         {/* Προγραμματισμένη: μόνο ενημέρωση, δεν γίνεται αποδοχή πριν την ώρα της */}
         {isScheduled && (
-          <View style={{ marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: isDarkMode ? '#1C1C1C' : '#F9FAFB' }}>
-            <Text style={{ fontSize: 13, color: isDarkMode ? '#9CA3AF' : '#6B7280', textAlign: 'center' }}>
-              <Feather name="clock" size={12} /> Θα σταλεί σε {formatCountdown(remainingMs)}
+          <View style={{ marginTop: 12, padding: 10, borderRadius: 12, backgroundColor: CardColors.chipBg }}>
+            <Text style={{ fontSize: 13, color: CardColors.muted, textAlign: 'center' }}>
+              <Feather name="clock" size={12} color={CardColors.muted} /> Θα σταλεί σε {formatCountdown(remainingMs)}
             </Text>
           </View>
         )}
@@ -741,13 +836,135 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         )}
 
         {isCompleted && (
-          <Text style={{ color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: isDarkMode ? '#333' : '#E5E7EB', paddingTop: 10 }}>
-            <Feather name="clock" size={12} /> Συνολικά: {totalMins} λ. (Ενεργή: {activeMins} λ. | Αποδεκτή: {acceptedMins} λ.)
+          <Text style={{ color: CardColors.muted, fontSize: 13, marginTop: 12, fontStyle: 'italic', borderTopWidth: 1, borderTopColor: CardColors.divider, paddingTop: 10 }}>
+            <Feather name="clock" size={12} color={CardColors.muted} /> Συνολικά: {totalMins} λ. (Ενεργή: {activeMins} λ. | Αποδεκτή: {acceptedMins} λ.)
           </Text>
         )}
       </View>
     );
   };
+
+  // ── Καρτέλα ΕΝΕΡΓΕΣ / ΑΠΟΔΕΚΤΕΣ ────────────────────────────────────────────
+  // Η ενεργή έχει GRADIENT, όχι επίπεδο χρώμα (mockup πελάτη): μια χρυσή λάμψη
+  // από πάνω αριστερά που σβήνει διαγώνια, μέσα στο ίδιο χρυσό περίγραμμα.
+  //
+  // ΓΙΑΤΙ ΕΠΙΤΡΕΠΕΤΑΙ ΜΕ OTA: το expo-linear-gradient είναι native module, αλλά
+  // μπήκε στο package.json στις 19/06/2026 ενώ το τελευταίο production build
+  // τελείωσε 31/07/2026 — άρα το autolinking το έχει ήδη περάσει στο APK
+  // (expo.modules.lineargradient.LinearGradientModule). Δεν χρειάζεται νέο build.
+  function renderTab(key, icon, label, direction) {
+    const on = activeTab === key;
+    const row = { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 15, paddingHorizontal: 8, borderRadius: 12 };
+    const inner = (
+      <>
+        <Feather name={icon} size={15} color={on ? theme.accent : theme.subtitle} />
+        <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, on && styles.tabTextActiveDriver]}>{label}</Text>
+      </>
+    );
+
+    // Το περίγραμμα του επιλεγμένου tab δεν είναι ομοιόμορφο: μένει συμπαγές στην
+    // «έξω» πλευρά (μακριά από το άλλο tab) και σβήνει σταδιακά προς την πλευρά
+    // του άλλου tab — τεχνική από το σημείο αναφοράς του πελάτη (31/07/2026).
+    // Υλοποιείται με ΔΥΟ εμφωλευμένα LinearGradient: το εξωτερικό ζωγραφίζει το
+    // gradient περίγραμμα, το εσωτερικό (μικρότερο κατά 1px γύρω-γύρω μέσω του
+    // padding) καλύπτει τα πάντα εκτός από αυτόν τον λεπτό δακτύλιο.
+    const solidBorder = isDarkMode ? 'rgba(212,168,83,0.5)' : 'rgba(197,160,102,0.5)';
+    const fadeBorder = isDarkMode ? 'rgba(212,168,83,0)' : 'rgba(197,160,102,0)';
+    const borderColors = direction === 'right' ? [fadeBorder, solidBorder] : [solidBorder, fadeBorder];
+
+    return (
+      <TouchableOpacity key={key} style={{ flex: 1 }} activeOpacity={0.85} onPress={() => setActiveTab(key)}>
+        {on ? (
+          <LinearGradient
+            colors={borderColors}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={{ borderRadius: 13, padding: 1 }}
+          >
+            <LinearGradient
+              colors={isDarkMode
+                ? ['rgba(212,168,83,0.24)', 'rgba(212,168,83,0.05)']
+                : ['rgba(197,160,102,0.30)', 'rgba(197,160,102,0.06)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[row, { borderRadius: 12 }]}
+            >
+              {inner}
+            </LinearGradient>
+          </LinearGradient>
+        ) : (
+          <View style={row}>{inner}</View>
+        )}
+      </TouchableOpacity>
+    );
+  }
+
+  // ── Άδεια λίστα: «σε αναμονή πάνω στον χάρτη» (02/08/2026) ─────────────────
+  // Το μήνυμα δεν είναι «δεν έχεις τίποτα» αλλά «είσαι online, το κέντρο σε
+  // βλέπει»: αφαιρετικό οδικό δίκτυο που σβήνει προς τις άκρες, με το στίγμα του
+  // διανομέα στο κέντρο να εκπέμπει παλμούς.
+  //
+  // ΥΒΡΙΔΙΟ, και τα δύο κομμάτια περνούν με eas update (χωρίς νέο native build):
+  //   • ο χάρτης είναι PNG (πολύπλοκα σχήματα — με Views είχε βγει κακό, βλ.
+  //     προηγούμενη απόπειρα)· δύο εκδοχές, γιατί είναι διάφανο και τα χρώματα
+  //     είναι καλιμπραρισμένα ανά φόντο (navy vs άσπρη κάρτα)
+  //   • οι παλμοί είναι Animated.View — σκέτοι κύκλοι, ό,τι ακριβώς κάνει καλά
+  //     το borderRadius, χωρίς να χρειάζεται react-native-svg
+  //
+  // Επιστρέφει ΣΤΟΙΧΕΙΟ (όχι component) ώστε να μη γίνεται remount σε κάθε render.
+  const ILLUSTRATION = 236;
+  const PULSE = 45; // ίδια ακτίνα με τον κύκλο-αφετηρία του χάρτη
+
+  function renderEmptyOrders() {
+    const isPending = activeTab === 'pending';
+
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20, paddingVertical: 28 }}>
+        <View style={{
+          width: '100%', maxWidth: 380, alignItems: 'center',
+          backgroundColor: theme.surface,
+          borderRadius: 22, borderWidth: 1, borderColor: theme.border,
+          paddingVertical: 32, paddingHorizontal: 20,
+        }}>
+          <View style={{ width: ILLUSTRATION, height: ILLUSTRATION, maxWidth: '100%', marginBottom: 12 }}>
+            <Image
+              source={isDarkMode ? emptyOrdersDark : emptyOrdersLight}
+              style={{ width: '100%', height: '100%' }}
+              resizeMode="contain"
+            />
+
+            {/* Οι παλμοί ΠΑΝΩ από τον χάρτη: από κάτω θα τους έκοβαν τα σκούρα
+                τετράγωνα και θα έμοιαζαν σπασμένοι. Το πέρασμα πάνω από την
+                καρφίτσα είναι χρυσό-πάνω-σε-χρυσό στο 50%, δηλαδή αόρατο. */}
+            {pulses.map((v, i) => (
+              <Animated.View
+                key={i}
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  top: (ILLUSTRATION - PULSE) / 2,
+                  left: (ILLUSTRATION - PULSE) / 2,
+                  width: PULSE, height: PULSE, borderRadius: PULSE / 2,
+                  borderWidth: 1.8, borderColor: theme.accent,
+                  opacity: v.interpolate({ inputRange: [0, 0.12, 1], outputRange: [0, 0.5, 0] }),
+                  transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 4.3] }) }],
+                }}
+              />
+            ))}
+          </View>
+
+          <Text style={{ fontSize: 17, fontWeight: '900', color: theme.text, textAlign: 'center' }}>
+            {isPending ? 'Δεν υπάρχουν ενεργές παραγγελίες' : 'Δεν έχετε αποδεκτές παραγγελίες'}
+          </Text>
+          <Text style={{ fontSize: 13, color: theme.subtitle, textAlign: 'center', marginTop: 8, lineHeight: 19 }}>
+            {isPending
+              ? 'Οι νέες παραγγελίες θα εμφανιστούν εδώ'
+              : 'Ό,τι αποδεχτείτε ή σας ανατεθεί θα εμφανιστεί εδώ'}
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   // Καταστήματα που εμφανίζονται στο επιλεγμένο διάστημα — αυτά γίνονται τα
   // κουμπιά του φίλτρου (όχι όλα τα καταστήματα της εταιρίας).
@@ -800,14 +1017,14 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: isDarkMode ? '#1A1A1A' : '#FFFFFF', zIndex: 10 }]}>
+      <View style={[styles.header, { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: theme.background, zIndex: 10 }]}>
         {/* Οι δύο πλευρές έχουν ΙΔΙΟ πλάτος επίτηδες: αλλιώς ο κεντρικός τίτλος
             μετατοπίζεται οπτικά προς τη στενότερη πλευρά και δεν είναι πραγματικά
             «στη μέση» όπως ζητήθηκε. */}
         {/* ΑΡΙΣΤΕΡΑ: hamburger (το dark/light mode μετακόμισε ΜΕΣΑ στο μενού) */}
         <View style={{ width: 110, alignItems: 'flex-start' }}>
           <TouchableOpacity onPress={() => setMenuVisible(true)} accessibilityLabel="Μενού">
-            <View style={{ backgroundColor: isDarkMode ? '#333' : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20 }}>
+            <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F0F0F0', padding: 8, paddingHorizontal: 12, borderRadius: 20 }}>
               <Feather name="menu" size={22} color={isDarkMode ? '#FFF' : '#000'} />
             </View>
           </TouchableOpacity>
@@ -830,10 +1047,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       </View>
 
       {/* Το «Στίγμα» έφυγε από τον header (συγκρουόταν με το menu/όνομα) και
-          κατέβηκε σε δική του διακριτική μπάρα κατάστασης. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 4, backgroundColor: isDarkMode ? '#141414' : '#F3F4F6' }}>
-        <Feather name="map-pin" size={10} color={isDarkMode ? '#888' : '#777'} />
-        <Text style={{ fontSize: 10, color: isDarkMode ? '#888' : '#777', marginLeft: 4 }}>
+          κατέβηκε σε δική του διακριτική μπάρα κατάστασης — ΙΔΙΑ απόχρωση με τον
+          header (surface) ώστε να αποτελούν οπτικά μία ενιαία «στήλη» από πάνω,
+          διακριτή από το σκουρότερο φόντο του σώματος/λίστας παρακάτω (σημείο
+          αναφοράς πελάτη 31/07/2026). */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 4, backgroundColor: theme.surface }}>
+        <Feather name="map-pin" size={10} color={isDarkMode ? theme.subtitle : '#777'} />
+        <View style={{
+          width: 7, height: 7, borderRadius: 4, marginLeft: 5,
+          backgroundColor: locationOk ? '#22C55E' : '#EF4444',
+        }} />
+        <Text style={{ fontSize: 10, color: isDarkMode ? theme.subtitle : '#777', marginLeft: 5 }}>
           Στίγμα: {lastLocationUpdate}
         </Text>
       </View>
@@ -848,14 +1072,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         </View>
       )}
 
-      <View style={[styles.tabContainer, { backgroundColor: isDarkMode ? '#121212' : '#F8F9FA', padding: 12, borderBottomWidth: 0 }]}>
-        <View style={{ flexDirection: 'row', backgroundColor: isDarkMode ? '#1A1A1A' : '#E9ECEF', borderRadius: 16, padding: 4, flex: 1, borderWidth: 1, borderColor: isDarkMode ? '#333' : '#DEE2E6' }}>
-          <TouchableOpacity style={[styles.tab, activeTab === 'pending' && (isDarkMode ? styles.tabActiveDarkDriver : styles.tabActiveLightDriver)]} onPress={() => setActiveTab('pending')}>
-            <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, activeTab === 'pending' && styles.tabTextActiveDriver]}>ΕΝΕΡΓΕΣ ({pendingOrders.length})</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.tab, activeTab === 'my_orders' && (isDarkMode ? styles.tabActiveDarkDriver : styles.tabActiveLightDriver)]} onPress={() => setActiveTab('my_orders')}>
-            <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, activeTab === 'my_orders' && styles.tabTextActiveDriver]}>ΑΠΟΔΕΚΤΕΣ ({myOrders.length})</Text>
-          </TouchableOpacity>
+      <View style={[styles.tabContainer, { backgroundColor: theme.background, padding: 12, borderBottomWidth: 0 }]}>
+        <View style={{ flexDirection: 'row', backgroundColor: theme.surface, borderRadius: 16, padding: 4, flex: 1, borderWidth: 1, borderColor: theme.border }}>
+          {renderTab('pending', 'clipboard', `ΕΝΕΡΓΕΣ (${pendingOrders.length})`, 'left')}
+          {renderTab('my_orders', 'user', `ΑΠΟΔΕΚΤΕΣ (${myOrders.length})`, 'right')}
         </View>
       </View>
 
@@ -869,6 +1089,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // Χωρίς αυτό η FlatList δεν ξαναζωγραφίζει τις γραμμές όταν χτυπά το ρολόι,
         // και οι χρόνοι/αντίστροφες μετρήσεις θα «πάγωναν».
         extraData={now}
+        // flexGrow: 1 ώστε η άδεια κατάσταση να κεντράρεται σε ΟΛΟ το ύψος που
+        // περισσεύει (χωρίς αυτό κολλάει στην κορυφή). Με παραγγελίες δεν αλλάζει τίποτα.
+        contentContainerStyle={{ flexGrow: 1 }}
+        ListEmptyComponent={renderEmptyOrders()}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchOrders} />}
       />
 
@@ -1016,7 +1240,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 const completed = item.completed_at ? new Date(item.completed_at) : null;
                 const km = formatKm(item.distance_km);
                 return (
-                  <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: isDarkMode ? '#333' : '#E5E7EB' }}>
+                  <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.border }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <Text style={{ fontWeight: '800', fontSize: 15, color: isDarkMode ? '#EAD7B1' : '#1F2937', flexShrink: 1 }} numberOfLines={1}>
                         {item.stores?.name || 'Άγνωστο Κατάστημα'}
@@ -1042,12 +1266,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                         </View>
                       ) : null}
                       {km ? (
-                        <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
                           <Feather name="map-pin" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
                           <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{km}</Text>
                         </View>
                       ) : null}
-                      <View style={{ backgroundColor: isDarkMode ? '#262626' : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
+                      <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
                         <Feather name="clock" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
                         <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{acceptedMins} λ.</Text>
                       </View>
@@ -1087,7 +1311,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={{
             width: '100%',
             maxWidth: 400,
-            backgroundColor: isDarkMode ? '#1C1C1C' : '#FFFFFF',
+            backgroundColor: theme.surface,
             borderRadius: 24,
             padding: 24,
             borderTopWidth: 4,
@@ -1101,7 +1325,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <Text style={{ fontSize: 20, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', marginBottom: 16 }}>
               <Feather name="bell" size={20} color={isDarkMode ? '#F0EBE2' : '#1E1A14'} /> Νέο Μήνυμα από Κέντρο
             </Text>
-            <View style={{ backgroundColor: isDarkMode ? '#2A2520' : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+            <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
               <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14', lineHeight: 24 }}>
                 {systemAlert}
               </Text>
@@ -1130,7 +1354,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={{
             width: '100%',
             maxWidth: 400,
-            backgroundColor: isDarkMode ? '#1C1C1C' : '#FFFFFF',
+            backgroundColor: theme.surface,
             borderRadius: 24,
             padding: 24,
             borderTopWidth: 4,
@@ -1140,7 +1364,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <Text style={{ fontSize: 20, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', marginBottom: 16 }}>
               <Feather name="bell" size={20} /> Νέα ανάθεση παραγγελίας
             </Text>
-            <View style={{ backgroundColor: isDarkMode ? '#2A2520' : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+            <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
               <Text style={{ fontSize: 16, fontWeight: '800', color: isDarkMode ? '#C5A066' : '#8A7347', marginBottom: 4 }}>
                 {assignmentAlert?.store_name}
               </Text>
