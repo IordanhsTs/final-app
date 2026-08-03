@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, FlatList, ScrollView, RefreshControl, Vibration, Linking, Platform, AppState, Modal, Image, Animated, Easing } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, RefreshControl, Vibration, Linking, Platform, AppState, Modal, Image, Animated, Easing } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import { formatKm, formatCountdown, orderDurations, minutesSinceCreated } from '../utils/orderInfo';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,6 +9,13 @@ import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, o
 import { getStyles, Colors, CardColors } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { getLastReadAt } from '../services/announcementsStore';
+import DriverMenu from './DriverMenu';
+import HistoryScreen from './HistoryScreen';
+import AvailabilityScreen from './AvailabilityScreen';
+import MyScheduleScreen from './MyScheduleScreen';
+import AnnouncementsScreen from './AnnouncementsScreen';
+import SupportScreen from './SupportScreen';
 
 const notificationSound = require('../../assets/notification.mp3');
 const alarmSound = require('../../assets/assignment.wav');
@@ -139,22 +145,14 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // dependency array — ένα state θα ήταν παγωμένο στην αρχική τιμή του.
   const scheduledIds = useRef(new Set());
   
-  // States για Ιστορικό & Μενού
+  // ── Μενού & οθόνες ────────────────────────────────────────────────────────
+  // Η εφαρμογή δεν έχει router: οι οθόνες του μενού ανοίγουν ως full-screen
+  // Modal πάνω από τη λίστα παραγγελιών. Το `activeScreen` κρατά ποια.
+  // «Αρχική» δεν είναι οθόνη — είναι το κλείσιμο όλων (activeScreen = null).
   const [menuVisible, setMenuVisible] = useState(false);
-  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
-  const [historyPeriod, setHistoryPeriod] = useState(0); // 0=Σήμερα, 3, 5, 7, -1=Custom
-  const [startDate, setStartDate] = useState(new Date());
-  const [endDate, setEndDate] = useState(new Date());
-  const [showPicker, setShowPicker] = useState(false);
-  const [pickerMode, setPickerMode] = useState('date');
-  const [pickerTarget, setPickerTarget] = useState('start');
-  const [historyData, setHistoryData] = useState([]);
-  // 'summary' = στατιστικά + ανά κατάστημα (όπως πριν) · 'detailed' = μία γραμμή ανά παραγγελία.
-  const [historyView, setHistoryView] = useState('summary');
-  // Φίλτρο καταστημάτων: άδειο = ΟΛΑ. Το φιλτράρισμα γίνεται τοπικά ώστε οι
-  // επιλογές να μη χάνονται και να μη χτυπάμε τη βάση σε κάθε πάτημα.
-  const [storeFilter, setStoreFilter] = useState([]);
-  
+  const [activeScreen, setActiveScreen] = useState(null);
+  const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+
   // States για Custom Modal Επιβεβαίωσης (και για απλά ενημερωτικά μηνύματα — βλ. showAlert
   // παρακάτω· έτσι όλα τα μηνύματα προς τον χρήστη μοιράζονται το ίδιο styled modal αντί να
   // εναλλάσσονται με το native Alert.alert).
@@ -470,32 +468,25 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // Σταματάμε κάθε ήχο/δόνηση όταν φεύγει η οθόνη, ώστε να μη μείνει να χτυπά.
   useEffect(() => stopAlarm, []);
 
-  useEffect(() => {
-    if (isHistoryVisible) fetchHistory();
-  }, [isHistoryVisible, historyPeriod, startDate, endDate]);
-
-  async function fetchHistory() {
-    let start = new Date(); let end = new Date();
-    if (historyPeriod === 0) {
-      start.setHours(0,0,0,0); end.setHours(23,59,59,999);
-    } else if (historyPeriod > 0) {
-      start.setDate(start.getDate() - historyPeriod); start.setHours(0,0,0,0); end.setHours(23,59,59,999);
-    } else {
-      start = startDate; end = endDate;
+  // ── Κόκκινη κουκκίδα ανακοινώσεων ─────────────────────────────────────────
+  // Οι ανακοινώσεις ΔΕΝ στέλνουν push (απόφαση 03/08/2026), οπότε η μόνη
+  // ένδειξη είναι αυτός ο μετρητής. Ερώτημα HEAD (κατεβάζει μόνο το πλήθος),
+  // μία φορά στο άνοιγμα και μετά σε κάθε κλείσιμο της οθόνης ανακοινώσεων.
+  async function refreshAnnouncementBadge() {
+    try {
+      const lastRead = await getLastReadAt();
+      let q = supabase.from('announcements')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_active', true);
+      if (lastRead) q = q.gt('created_at', lastRead);
+      const { count } = await q;
+      setUnreadAnnouncements(count || 0);
+    } catch (e) {
+      console.log('Announcements badge error:', e);
     }
-
-    const { data } = await supabase.from('orders')
-      .select('*, stores(name, delivery_fee)')
-      .eq('status', 'completed').eq('driver_id', currentUser.id)
-      .gte('completed_at', start.toISOString())
-      .lte('completed_at', end.toISOString());
-    const rows = data || [];
-    setHistoryData(rows);
-    // Αλλάζοντας διάστημα, καταστήματα που δεν υπάρχουν πια στα δεδομένα θα
-    // έμεναν επιλεγμένα και θα έδειχναν κενή λίστα χωρίς προφανή λόγο.
-    const availableIds = new Set(rows.map(o => o.store_id));
-    setStoreFilter(prev => prev.filter(id => availableIds.has(id)));
   }
+
+  useEffect(() => { refreshAnnouncementBadge(); }, []);
 
   async function fetchOrders() {
     setRefreshing(true);
@@ -723,24 +714,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       }
     });
     setConfirmModalVisible(true);
-  };
-
-  const handleDateChange = (event, selectedDate) => {
-    setShowPicker(false);
-    if (event.type === 'dismissed' || !selectedDate) return;
-    
-    const isStart = pickerTarget === 'start';
-    const currentDate = isStart ? startDate : endDate;
-    
-    if (pickerMode === 'date') {
-      const newD = new Date(currentDate); newD.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
-      if (isStart) setStartDate(newD); else setEndDate(newD);
-      setTimeout(() => { setPickerMode('time'); setShowPicker(true); }, 100);
-    } else {
-      const newD = new Date(currentDate); newD.setHours(selectedDate.getHours(), selectedDate.getMinutes());
-      if (isStart) setStartDate(newD); else setEndDate(newD);
-      setPickerMode('date');
-    }
   };
 
   // Άνοιγμα πλοήγησης προς οποιαδήποτε διεύθυνση (κατάστημα ή πελάτη).
@@ -1135,54 +1108,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     );
   }
 
-  // Καταστήματα που εμφανίζονται στο επιλεγμένο διάστημα — αυτά γίνονται τα
-  // κουμπιά του φίλτρου (όχι όλα τα καταστήματα της εταιρίας).
-  const historyStores = [];
-  const seenStoreIds = new Set();
-  historyData.forEach(o => {
-    if (!o.store_id || seenStoreIds.has(o.store_id)) return;
-    seenStoreIds.add(o.store_id);
-    historyStores.push({ id: o.store_id, name: o.stores?.name || 'Άγνωστο Κατάστημα' });
-  });
-  historyStores.sort((a, b) => a.name.localeCompare(b.name, 'el'));
-
-  const filteredHistory = storeFilter.length === 0
-    ? historyData
-    : historyData.filter(o => storeFilter.includes(o.store_id));
-
-  const toggleStoreFilter = (id) =>
-    setStoreFilter(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-
-  // Υπολογισμοί Στατιστικών
-  let totalOrders = filteredHistory.length;
-  let totalDeliveryMins = 0; let countWithTime = 0;
-  let coffeeCount = 0; let foodCount = 0;
-  let totalRevenue = 0;
-  let totalKm = 0;
-  let storeCounts = {};
-
-  filteredHistory.forEach(o => {
-    if (o.accepted_at && o.completed_at) {
-      totalDeliveryMins += (new Date(o.completed_at) - new Date(o.accepted_at)) / 60000;
-      countWithTime++;
-    }
-    const fee = parseFloat(o.stores?.delivery_fee);
-    if (fee === 1.5) {
-      coffeeCount++;
-      totalRevenue += 1.0;
-    } else if (fee === 1.8) {
-      foodCount++;
-      totalRevenue += 1.3;
-    } else if (!isNaN(fee)) {
-      totalRevenue += Math.max(0, fee - 0.5); // Σε περίπτωση κάποιας άλλης χρέωσης, απλά αφαιρούμε τα 50 λεπτά της εταιρείας
-    }
-    const sName = o.stores?.name || 'Άγνωστο Κατάστημα';
-    storeCounts[sName] = (storeCounts[sName] || 0) + 1;
-    const d = parseFloat(o.distance_km);
-    if (!isNaN(d)) totalKm += d;
-  });
-  const avgTime = countWithTime > 0 ? (totalDeliveryMins / countWithTime).toFixed(1) : 0;
-  const formattedRevenue = totalRevenue.toFixed(2);
 
   return (
     <View style={styles.container}>
@@ -1271,194 +1196,61 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         }
       />
 
-      {/* Hamburger Menu Modal */}
-      <Modal visible={menuVisible} transparent={true} animationType="fade" onRequestClose={() => setMenuVisible(false)}>
-        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
-          <View style={styles.menuContent}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); setIsHistoryVisible(true); }}>
-              <Text style={styles.menuItemText}><Feather name="bar-chart-2" size={16} /> Ιστορικό / Στατιστικά</Text>
-            </TouchableOpacity>
-            {/* Το dark/light mode ζει πλέον εδώ μέσα (αίτημα πελάτη) — ο header
-                κράτησε μόνο menu / τίτλο / όνομα. Το μενού μένει ανοιχτό ώστε να
-                βλέπει αμέσως την αλλαγή. */}
-            <TouchableOpacity style={styles.menuItem} onPress={() => setIsDarkMode(!isDarkMode)}>
-              <Text style={styles.menuItemText}>
-                <Feather name={isDarkMode ? 'sun' : 'moon'} size={16} /> {isDarkMode ? 'Φωτεινό θέμα' : 'Σκούρο θέμα'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleDriverLogout}>
-              <Text style={[styles.menuItemText, { color: '#EF4444' }]}><Feather name="log-out" size={16} /> Έξοδος</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
+      {/* ── Πλαϊνό μενού ────────────────────────────────────────────────── */}
+      <DriverMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
+        driverName={currentUser.full_name}
+        isOnDuty={locationOk}
+        activeScreen={activeScreen}
+        unreadAnnouncements={unreadAnnouncements}
+        onLogout={() => { setMenuVisible(false); handleDriverLogout(); }}
+        onNavigate={(key) => {
+          setMenuVisible(false);
+          // «Αρχική» δεν ανοίγει οθόνη — κλείνει ό,τι είναι ανοιχτό και αφήνει
+          // τον διανομέα στη λίστα με τις ενεργές παραγγελίες (αίτημα πελάτη).
+          if (key === 'home') {
+            setActiveScreen(null);
+            setActiveTab('pending');
+            return;
+          }
+          // ΜΙΚΡΗ ΚΑΘΥΣΤΕΡΗΣΗ, ΟΧΙ ΔΙΑΚΟΣΜΗΤΙΚΗ: στο Android ένα Modal που
+          // ανοίγει ΤΗΝ ΩΡΑ που κλείνει άλλο μπορεί να μην εμφανιστεί καθόλου
+          // — ο διανομέας θα πατούσε «Διαθεσιμότητα» και δεν θα γινόταν τίποτα.
+          // Ο χρόνος ταιριάζει με το κλείσιμο του συρταριού.
+          setTimeout(() => setActiveScreen(key), 240);
+        }}
+      />
+
+      {/* ── Οθόνες μενού ───────────────────────────────────────────────────
+          Ένα Modal ανά οθόνη, όχι router: η εφαρμογή δεν έχει react-navigation
+          και ένα νέο native dependency θα απαιτούσε build — ενώ όλα αυτά
+          πρέπει να φτάσουν στα κινητά με eas update. */}
+      <Modal
+        visible={activeScreen !== null}
+        animationType="slide"
+        onRequestClose={() => setActiveScreen(null)}
+      >
+        {activeScreen === 'history' ? (
+          <HistoryScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+        ) : activeScreen === 'availability' ? (
+          <AvailabilityScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+        ) : activeScreen === 'schedule' ? (
+          <MyScheduleScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+        ) : activeScreen === 'announcements' ? (
+          <AnnouncementsScreen
+            currentUser={currentUser}
+            isDarkMode={isDarkMode}
+            onBack={() => setActiveScreen(null)}
+            onRead={refreshAnnouncementBadge}
+          />
+        ) : activeScreen === 'support' ? (
+          <SupportScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+        ) : null}
       </Modal>
 
-      {/* History & Stats Modal */}
-      <Modal visible={isHistoryVisible} animationType="slide" onRequestClose={() => setIsHistoryVisible(false)}>
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Ιστορικό</Text>
-            <TouchableOpacity onPress={() => setIsHistoryVisible(false)}>
-              <Feather name="x" size={26} color={isDarkMode ? '#FFF' : '#000'} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.filterRow}>
-            {[{l:'Σήμερα', v:0}, {l:'3', v:3}, {l:'5', v:5}, {l:'7', v:7}, {l:'Custom', v:-1}].map(f => (
-              <TouchableOpacity 
-                key={f.v} 
-                style={[
-                  styles.filterBtn, 
-                  historyPeriod === f.v && styles.filterBtnActive,
-                  f.l.length === 1 ? { minWidth: 40, alignItems: 'center', justifyContent: 'center' } : null
-                ]} 
-                onPress={() => setHistoryPeriod(f.v)}
-              >
-                <Text style={[styles.filterBtnText, historyPeriod === f.v && styles.filterBtnTextActive]}>{f.l}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {historyPeriod === -1 && (
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20, gap: 10 }}>
-              <TouchableOpacity style={[styles.inputSmall, {flex:1, marginBottom: 0}]} onPress={() => { setPickerTarget('start'); setPickerMode('date'); setShowPicker(true); }}>
-                <Text style={{color: isDarkMode ? '#FFF' : '#000', fontSize: 13}}>Από: {startDate.getDate()}/{startDate.getMonth()+1} {startDate.getHours()}:{String(startDate.getMinutes()).padStart(2,'0')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.inputSmall, {flex:1, marginBottom: 0}]} onPress={() => { setPickerTarget('end'); setPickerMode('date'); setShowPicker(true); }}>
-                <Text style={{color: isDarkMode ? '#FFF' : '#000', fontSize: 13}}>Έως: {endDate.getDate()}/{endDate.getMonth()+1} {endDate.getHours()}:{String(endDate.getMinutes()).padStart(2,'0')}</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {showPicker && (
-            <DateTimePicker value={pickerTarget === 'start' ? startDate : endDate} mode={pickerMode} is24Hour={true} display="default" onChange={handleDateChange} />
-          )}
-
-          {/* Φίλτρο ανά κατάστημα — οποιοσδήποτε συνδυασμός. Καμία επιλογή = όλα. */}
-          {historyStores.length > 1 && (
-            <View style={{ marginBottom: 14 }}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
-                <TouchableOpacity
-                  style={[styles.filterBtn, storeFilter.length === 0 && styles.filterBtnActive]}
-                  onPress={() => setStoreFilter([])}
-                >
-                  <Text style={[styles.filterBtnText, storeFilter.length === 0 && styles.filterBtnTextActive]}>Όλα</Text>
-                </TouchableOpacity>
-                {historyStores.map(s => {
-                  const on = storeFilter.includes(s.id);
-                  return (
-                    <TouchableOpacity
-                      key={s.id}
-                      style={[styles.filterBtn, on && styles.filterBtnActive]}
-                      onPress={() => toggleStoreFilter(s.id)}
-                    >
-                      <Text style={[styles.filterBtnText, on && styles.filterBtnTextActive]}>{s.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
-          <View style={styles.statRow}>
-            <View style={[styles.statBox, { backgroundColor: isDarkMode ? '#1e3a24' : '#E8F5E9', borderColor: '#10B981' }]}><Text style={[styles.statValue, { color: '#10B981', fontSize: 28 }]}>{formattedRevenue}€</Text><Text style={styles.statLabel}>Συνολικό Κέρδος</Text></View>
-          </View>
-
-          <View style={styles.statRow}>
-            <View style={styles.statBox}><Text style={styles.statValue}>{totalOrders}</Text><Text style={styles.statLabel}>Παραγγελίες</Text></View>
-            <View style={styles.statBox}><Text style={styles.statValue}>{avgTime}'</Text><Text style={styles.statLabel}>Μ.Ο. Διανομής</Text></View>
-          </View>
-          <View style={styles.statRow}>
-            <View style={styles.statBox}><Text style={[styles.statValue, {color:'#E53935'}]}>{foodCount}</Text><Text style={styles.statLabel}>Φαγητά (1.30€)</Text></View>
-            <View style={styles.statBox}><Text style={[styles.statValue, {color:'#8E44AD'}]}>{coffeeCount}</Text><Text style={styles.statLabel}>Καφέδες (1.00€)</Text></View>
-          </View>
-          <View style={styles.statRow}>
-            <View style={styles.statBox}>
-              <Text style={[styles.statValue, { color: '#208AEF' }]}>{totalKm.toFixed(1)}</Text>
-              <Text style={styles.statLabel}>Συνολικά χλμ</Text>
-            </View>
-          </View>
-
-          <View style={[styles.filterRow, { marginTop: 10 }]}>
-            <TouchableOpacity
-              style={[styles.filterBtn, { flex: 1, alignItems: 'center' }, historyView === 'summary' && styles.filterBtnActive]}
-              onPress={() => setHistoryView('summary')}
-            >
-              <Text style={[styles.filterBtnText, historyView === 'summary' && styles.filterBtnTextActive]}>Ανά Κατάστημα</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.filterBtn, { flex: 1, alignItems: 'center' }, historyView === 'detailed' && styles.filterBtnActive]}
-              onPress={() => setHistoryView('detailed')}
-            >
-              <Text style={[styles.filterBtnText, historyView === 'detailed' && styles.filterBtnTextActive]}>Αναλυτικό Ιστορικό</Text>
-            </TouchableOpacity>
-          </View>
-
-          {historyView === 'summary' ? (
-            <FlatList
-              data={Object.entries(storeCounts).sort((a,b) => b[1] - a[1])}
-              keyExtractor={item => item[0]}
-              renderItem={({item}) => (
-                <View style={styles.tableRow}>
-                  <Text style={styles.tableCell}>{item[0]}</Text>
-                  <Text style={styles.tableCellBold}>{item[1]}</Text>
-                </View>
-              )}
-              ListEmptyComponent={<Text style={{color: isDarkMode ? '#AAA' : '#666', textAlign:'center', marginTop:20}}>Καμία παραγγελία σε αυτό το διάστημα.</Text>}
-            />
-          ) : (
-            <FlatList
-              data={[...filteredHistory].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))}
-              keyExtractor={item => item.id.toString()}
-              renderItem={({ item }) => {
-                const { acceptedMins } = orderDurations(item);
-                const completed = item.completed_at ? new Date(item.completed_at) : null;
-                const km = formatKm(item.distance_km);
-                return (
-                  <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.border }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <Text style={{ fontWeight: '800', fontSize: 15, color: isDarkMode ? '#EAD7B1' : '#1F2937', flexShrink: 1 }} numberOfLines={1}>
-                        {item.stores?.name || 'Άγνωστο Κατάστημα'}
-                      </Text>
-                      {completed ? (
-                        <Text style={{ fontSize: 12, color: isDarkMode ? '#9CA3AF' : '#6B7280' }}>
-                          {completed.getDate()}/{completed.getMonth() + 1} {completed.getHours()}:{String(completed.getMinutes()).padStart(2, '0')}
-                        </Text>
-                      ) : null}
-                    </View>
-
-                    {/* Πού πήγε η παραγγελία — όχι μόνο από πού ήρθε */}
-                    <Text style={{ fontSize: 13, color: isDarkMode ? '#C9C9C9' : '#374151', marginBottom: 6 }} numberOfLines={1}>
-                      <Feather name="corner-down-right" size={11} /> {item.address}
-                    </Text>
-
-                    <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                      {item.payment_method ? (
-                        <View style={{ backgroundColor: item.payment_method === 'cash' ? '#10B981' : '#208AEF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 }}>
-                          <Text style={{ fontWeight: '800', color: '#FFF', fontSize: 10, letterSpacing: 0.5 }}>
-                            {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
-                          </Text>
-                        </View>
-                      ) : null}
-                      {km ? (
-                        <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
-                          <Feather name="map-pin" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
-                          <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{km}</Text>
-                        </View>
-                      ) : null}
-                      <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, flexDirection: 'row', alignItems: 'center' }}>
-                        <Feather name="clock" size={10} color={isDarkMode ? '#9CA3AF' : '#6B7280'} />
-                        <Text style={{ fontWeight: '800', color: isDarkMode ? '#9CA3AF' : '#6B7280', fontSize: 10, marginLeft: 3 }}>{acceptedMins} λ.</Text>
-                      </View>
-                    </View>
-                  </View>
-                );
-              }}
-              ListEmptyComponent={<Text style={{color: isDarkMode ? '#AAA' : '#666', textAlign:'center', marginTop:20}}>Καμία παραγγελία σε αυτό το διάστημα.</Text>}
-            />
-          )}
-        </View>
-      </Modal>
 
       {/* Custom Alert Modal για επιβεβαίωση ενεργειών */}
       <Modal visible={confirmModalVisible} transparent={true} animationType="fade" onRequestClose={() => setConfirmModalVisible(false)}>
