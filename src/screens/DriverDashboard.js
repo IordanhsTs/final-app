@@ -191,8 +191,37 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     })();
   }, []);
 
+  // Συγχρονίζει το «Στίγμα» με την ΑΛΗΘΕΙΑ της βάσης (`drivers.last_seen`,
+  // trigger `trg_driver_last_seen` — ενημερώνεται σε ΚΑΘΕ update της γραμμής)
+  // αντί να περιμένει μόνο το realtime κανάλι `driver_monitor_*` παρακάτω.
+  //
+  // ΓΙΑΤΙ ΧΡΕΙΑΖΕΤΑΙ: το native GPS service συνεχίζει να στέλνει στίγματα ΚΑΙ
+  // με νεκρό/παγωμένο το JS (βλ. sessionStore) — αλλά το Realtime websocket
+  // ΔΕΝ αναπληρώνει events που χάθηκαν όσο ήταν αποσυνδεδεμένο (κλειδωμένη
+  // οθόνη, Doze, εναλλαγή εφαρμογής). Χωρίς αυτό, κάθε επιστροφή στο
+  // προσκήνιο έδειχνε ψευδώς «χωρίς σήμα» μέχρι να φτάσει το επόμενο φυσικό
+  // στίγμα — αυτό είναι το «στην αρχή πράσινο, μετά σκουραίνει» που ανέφερε ο
+  // πελάτης 04/08/2026, ενώ το GPS δούλευε κανονικά όλη την ώρα.
+  async function refreshLocationStatus() {
+    try {
+      const { data } = await supabase
+        .from('drivers')
+        .select('last_seen')
+        .eq('id', currentUser.id)
+        .maybeSingle();
+      if (!data?.last_seen) return;
+      const seen = new Date(data.last_seen);
+      lastLocationUpdateAt.current = seen.getTime();
+      setLocationOk(Date.now() - seen.getTime() <= 30000);
+      setLastLocationUpdate(`${seen.getHours()}:${String(seen.getMinutes()).padStart(2, '0')}:${String(seen.getSeconds()).padStart(2, '0')}`);
+    } catch (e) {
+      console.log('Location status error:', e);
+    }
+  }
+
   useEffect(() => {
     fetchOrders();
+    refreshLocationStatus();
 
     // Φόρτωση κατάστασης άδειας τοποθεσίας απευθείας από το OS (όχι cache)
     const checkPerms = async () => {
@@ -279,6 +308,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // το FCM.
         suppressAlarmOnNextFetch.current = true;
         fetchOrders();
+        // Ίδιος λόγος: το realtime κανάλι GPS χάνει ό,τι συνέβη όσο ήμασταν
+        // στο παρασκήνιο, οπότε ρωτάμε ΑΠΕΥΘΕΙΑΣ τη βάση για το πραγματικό
+        // last_seen αντί να περιμένουμε το επόμενο φυσικό στίγμα.
+        refreshLocationStatus();
       }
     });
 
