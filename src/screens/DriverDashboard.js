@@ -1191,7 +1191,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             accessibilityLabel={locationOk ? 'Στίγμα ενεργό' : 'Χωρίς στίγμα'}
             style={{
               width: 8, height: 8, borderRadius: 4,
-              backgroundColor: locationOk ? '#22C55E' : '#EF4444',
+              // Πιο ζωντανό πράσινο εδώ (αίτημα πελάτη 04/08/2026): το ίδιο ακριβώς
+              // #22C55E του μενού έμοιαζε ξεθωριασμένο σε αυτή τη μικρή κουκκίδα
+              // δίπλα στο χρυσό «VERTEX DRIVER» — η χρυσή γειτονιά «τρώει» τον
+              // κορεσμό του πρασίνου. Πιο κορεσμένη απόχρωση για να «τραβάει».
+              backgroundColor: locationOk ? '#00E676' : '#EF4444',
               opacity: gpsBlink,
             }}
           />
