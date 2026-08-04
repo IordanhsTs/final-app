@@ -354,6 +354,30 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     return () => clearInterval(t);
   }, []);
 
+  // ── Κουκκίδα «Στίγμα» στον header (αίτημα πελάτη 04/08/2026) ───────────────
+  // Έφυγε η ξεχωριστή μπάρα κάτω από τον header (κατέβασμα όλης της οθόνης
+  // κατά μία σειρά) — μένει μόνο μια μικρή κουκκίδα δίπλα στο «VERTEX DRIVER»,
+  // με την αναλυτική ώρα να μετακόμισε στο πλαϊνό μενού. ΑΝΑΒΟΣΒΗΝΕΙ κόκκινη
+  // όσο δεν έχει σήμα — μόνιμα κόκκινη θα περνούσε απαρατήρητη σε μια γωνία
+  // τόσο μικρή· σταθερή πράσινη όταν όλα καλά, γιατί εκεί δεν χρειάζεται να
+  // τραβήξει το βλέμμα.
+  const gpsBlink = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (locationOk) {
+      gpsBlink.stopAnimation();
+      gpsBlink.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(gpsBlink, { toValue: 0.15, duration: 500, useNativeDriver: true }),
+        Animated.timing(gpsBlink, { toValue: 1, duration: 500, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [locationOk, gpsBlink]);
+
   // ── Παλμοί «διαθεσιμότητας» στην άδεια λίστα ───────────────────────────────
   // Τρεις ομόκεντροι κύκλοι που ξεδιπλώνονται από το στίγμα του διανομέα. Είναι
   // ΣΚΕΤΟΙ ΚΥΚΛΟΙ (Animated.View + borderRadius), όχι SVG: το react-native-svg
@@ -1160,9 +1184,17 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           </TouchableOpacity>
         </View>
 
-        {/* ΚΕΝΤΡΟ: ο τίτλος */}
-        <View style={{ flex: 1, alignItems: 'center' }}>
+        {/* ΚΕΝΤΡΟ: ο τίτλος + κουκκίδα στίγματος δεξιά του */}
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
           <Text style={{ fontSize: 12, color: '#C5A066', fontWeight: 'bold', letterSpacing: 1.5 }}>VERTEX DRIVER</Text>
+          <Animated.View
+            accessibilityLabel={locationOk ? 'Στίγμα ενεργό' : 'Χωρίς στίγμα'}
+            style={{
+              width: 8, height: 8, borderRadius: 4,
+              backgroundColor: locationOk ? '#22C55E' : '#EF4444',
+              opacity: gpsBlink,
+            }}
+          />
         </View>
 
         {/* ΔΕΞΙΑ: ολόκληρο το όνομα του συνδεδεμένου διανομέα */}
@@ -1174,22 +1206,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             {currentUser.full_name}
           </Text>
         </View>
-      </View>
-
-      {/* Το «Στίγμα» έφυγε από τον header (συγκρουόταν με το menu/όνομα) και
-          κατέβηκε σε δική του διακριτική μπάρα κατάστασης — ΙΔΙΑ απόχρωση με τον
-          header (surface) ώστε να αποτελούν οπτικά μία ενιαία «στήλη» από πάνω,
-          διακριτή από το σκουρότερο φόντο του σώματος/λίστας παρακάτω (σημείο
-          αναφοράς πελάτη 31/07/2026). */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 4, backgroundColor: theme.surface }}>
-        <Feather name="map-pin" size={10} color={isDarkMode ? theme.subtitle : '#777'} />
-        <View style={{
-          width: 7, height: 7, borderRadius: 4, marginLeft: 5,
-          backgroundColor: locationOk ? '#22C55E' : '#EF4444',
-        }} />
-        <Text style={{ fontSize: 10, color: isDarkMode ? theme.subtitle : '#777', marginLeft: 5 }}>
-          Στίγμα: {lastLocationUpdate}
-        </Text>
       </View>
 
       {/* READ-ONLY-ON-FAILOVER: μπάρα όταν τρέχουμε στο εφεδρικό (standby) */}
@@ -1243,6 +1259,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         setIsDarkMode={setIsDarkMode}
         driverName={currentUser.full_name}
         isOnDuty={locationOk}
+        lastLocationUpdate={lastLocationUpdate}
         activeScreen={activeScreen}
         unreadAnnouncements={unreadAnnouncements}
         onLogout={() => { setMenuVisible(false); handleDriverLogout(); }}

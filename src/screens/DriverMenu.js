@@ -35,7 +35,7 @@ function initialsOf(name) {
 export default function DriverMenu({
   visible, onClose, onNavigate, onLogout,
   isDarkMode, setIsDarkMode,
-  driverName, isOnDuty, activeScreen, unreadAnnouncements,
+  driverName, isOnDuty, lastLocationUpdate, activeScreen, unreadAnnouncements,
 }) {
   const theme = Colors[isDarkMode ? 'dark' : 'light'];
   const width = Math.min(300, Dimensions.get('window').width * 0.82);
@@ -85,12 +85,16 @@ export default function DriverMenu({
                 <Text style={{ color: theme.text, fontWeight: '900', fontSize: 15 }} numberOfLines={2}>
                   {driverName}
                 </Text>
-                {/* Η κουκκίδα δείχνει αν φτάνουν στίγματα GPS — την ίδια αλήθεια
-                    με την μπάρα «Στίγμα» της αρχικής, όχι μια δεύτερη έννοια. */}
+                {/* Η αναλυτική γραμμή στίγματος (ώρα τελευταίου GPS update) ζούσε
+                    πριν σε δική της μπάρα κάτω από τον header της αρχικής —
+                    μετακόμισε εδώ (αίτημα πελάτη 04/08/2026), στον header έμεινε
+                    μόνο μια μικρή κουκκίδα δίπλα στο «VERTEX DRIVER». Η κουκκίδα
+                    δείχνει την ίδια αλήθεια GPS με εκείνη, όχι μια δεύτερη έννοια. */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <Feather name="map-pin" size={11} color={theme.subtitle} />
                   <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: isOnDuty ? '#22C55E' : '#EF4444' }} />
                   <Text style={{ color: theme.subtitle, fontSize: 12, fontWeight: '600' }}>
-                    {isOnDuty ? 'Ενεργός' : 'Χωρίς στίγμα'}
+                    Στίγμα: {lastLocationUpdate}
                   </Text>
                 </View>
               </View>
