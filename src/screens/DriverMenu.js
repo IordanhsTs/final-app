@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Modal, Animated, Switch, ScrollView, Dimensions } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, Animated, Switch, ScrollView, Dimensions, BackHandler } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { Colors } from '../styles/globalStyles';
 
@@ -40,25 +40,64 @@ export default function DriverMenu({
   const theme = Colors[isDarkMode ? 'dark' : 'light'];
   const width = Math.min(300, Dimensions.get('window').width * 0.82);
   const slide = useRef(new Animated.Value(-width)).current;
+  const backdrop = useRef(new Animated.Value(0)).current;
 
-  // Το Modal εμφανίζεται με fade· το ίδιο το συρτάρι γλιστράει. Χωρίς αυτό
-  // εμφανιζόταν απότομα στη θέση του και έμοιαζε με σφάλμα ζωγραφικής.
+  // ΧΩΡΙΣ native <Modal> (αίτημα πελάτη 04/08/2026): το <Modal transparent
+  // animationType="fade"> έτρεχε ΔΙΚΟ ΤΟΥ native fade πάνω στο ίδιο το
+  // Android Window ΤΑΥΤΟΧΡΟΝΑ με αυτό το χειροκίνητο slide — δύο ανεξάρτητα
+  // animation, το ένα εκτός ελέγχου του JS. Σε μερικές συσκευές το native
+  // dim του Window δεν καθάριζε πλήρως μετά το κλείσιμο, και ό,τι χρώμα
+  // υπήρχε από κάτω (π.χ. η πράσινη κουκκίδα στίγματος του header) έμενε
+  // ελαφρώς σκουρότερο. Τώρα το σκοτάδι πίσω από το συρτάρι είναι ΔΙΚΟ ΜΑΣ
+  // Animated.Value (backdrop) — ένα animation, πλήρως ελεγχόμενο, μηδενίζει
+  // εγγυημένα στο κλείσιμο.
+  //
+  // `mounted` κρατά το συρτάρι ζωντανό ΟΣΟ διαρκεί το slide-out· χωρίς αυτό
+  // θα εξαφανιζόταν ακαριαία αντί να γλιστρήσει έξω.
+  const [mounted, setMounted] = useState(visible);
+
   useEffect(() => {
-    Animated.timing(slide, {
-      toValue: visible ? 0 : -width,
-      duration: visible ? 220 : 160,
-      useNativeDriver: true,
-    }).start();
-  }, [visible, width, slide]);
+    if (visible) setMounted(true);
+    Animated.parallel([
+      Animated.timing(slide, {
+        toValue: visible ? 0 : -width,
+        duration: visible ? 220 : 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdrop, {
+        toValue: visible ? 1 : 0,
+        duration: visible ? 220 : 160,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished && !visible) setMounted(false);
+    });
+  }, [visible, width, slide, backdrop]);
+
+  // Το πλήκτρο «πίσω» του Android έκλεινε το συρτάρι μέσω του onRequestClose
+  // του Modal — τώρα που δεν υπάρχει Modal, το αναλαμβάνουμε εμείς.
+  useEffect(() => {
+    if (!mounted) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [mounted, onClose]);
 
   const renderIcon = (item, color, size = 21) =>
     item.lib === 'ionicons'
       ? <Ionicons name={item.icon} size={size} color={color} />
       : <Feather name={item.icon} size={size} color={color} />;
 
+  if (!mounted) return null;
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.55)' }}>
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999, elevation: 999 }}>
+      <Animated.View
+        pointerEvents={visible ? 'auto' : 'none'}
+        style={{ flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.55)', opacity: backdrop }}
+      >
         <Animated.View
           style={{
             width,
@@ -179,7 +218,7 @@ export default function DriverMenu({
 
         {/* Πάτημα έξω από το συρτάρι = κλείσιμο */}
         <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={onClose} />
-      </View>
-    </Modal>
+      </Animated.View>
+    </View>
   );
 }
