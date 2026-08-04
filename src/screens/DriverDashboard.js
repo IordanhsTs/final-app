@@ -1007,6 +1007,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const ILLUSTRATION = 236;
   const PULSE = 45; // ίδια ακτίνα με τον κύκλο-αφετηρία του χάρτη
 
+  // Το κείμενο τίτλου/υπότιτλου διαφέρει σε μήκος ανάμεσα στις δύο καρτέλες
+  // (ο υπότιτλος των «Αποδεκτών» είναι αισθητά μακρύτερος) και χωρίς σταθερό
+  // ύψος γι' αυτά τα δύο, η κάρτα άλλαζε μέγεθος όταν ο διανομέας πήγαινε από τη
+  // μία καρτέλα στην άλλη — αίτημα πελάτη 04/08/2026 να μη «χοροπηδάει».
+  const EMPTY_TITLE_H = 44; // 2 γραμμές στα 22 lineHeight
+  const EMPTY_SUBTITLE_H = 38; // 2 γραμμές στα 19 lineHeight
+
   function renderEmptyOrders() {
     const isPending = activeTab === 'pending';
 
@@ -1045,14 +1052,29 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             ))}
           </View>
 
-          <Text style={{ fontSize: 17, fontWeight: '900', color: theme.text, textAlign: 'center' }}>
-            {isPending ? 'Δεν υπάρχουν ενεργές παραγγελίες' : 'Δεν έχετε αποδεκτές παραγγελίες'}
-          </Text>
-          <Text style={{ fontSize: 13, color: theme.subtitle, textAlign: 'center', marginTop: 8, lineHeight: 19 }}>
-            {isPending
-              ? 'Οι νέες παραγγελίες θα εμφανιστούν εδώ'
-              : 'Ό,τι αποδεχτείτε ή σας ανατεθεί θα εμφανιστεί εδώ'}
-          </Text>
+          <View style={{ minHeight: EMPTY_TITLE_H, justifyContent: 'center' }}>
+            <Text style={{ fontSize: 17, fontWeight: '900', color: theme.text, textAlign: 'center', lineHeight: 22 }} numberOfLines={2}>
+              {isPending ? 'Δεν υπάρχουν ενεργές παραγγελίες' : 'Δεν έχετε αποδεκτές παραγγελίες'}
+            </Text>
+          </View>
+          <View style={{ minHeight: EMPTY_SUBTITLE_H, justifyContent: 'center', marginTop: 8 }}>
+            <Text style={{ fontSize: 13, color: theme.subtitle, textAlign: 'center', lineHeight: 19 }} numberOfLines={2}>
+              {isPending
+                ? 'Οι νέες παραγγελίες θα εμφανιστούν εδώ'
+                : 'Ό,τι αποδεχτείτε ή σας ανατεθεί θα εμφανιστεί εδώ'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Το πλαίσιο «σήμερα» ΚΟΛΛΗΤΑ κάτω από την κάρτα (αίτημα πελάτη
+            04/08/2026): πριν ζούσε ΜΟΝΟ σαν ListFooterComponent, που με άδεια
+            λίστα σπρωχνόταν στην πραγματική βάση της οθόνης (κάτω από το
+            flex:1 του empty state) — εκεί ακριβώς που κρύβονται τα gesture
+            κουμπιά πλοήγησης σε τηλέφωνα χωρίς τα κλασικά back/home/recents
+            (π.χ. Samsung S23 του διανομέα). Τώρα είναι ΜΕΣΑ στο ίδιο
+            κεντραρισμένο group με την κάρτα, άρα ανεβαίνει μαζί της. */}
+        <View style={{ width: '100%', maxWidth: 380, marginTop: 12 }}>
+          {renderTodayStatsRow()}
         </View>
       </View>
     );
@@ -1071,7 +1093,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // το contentContainerStyle έχει flexGrow και το άδειο πλαίσιο τεντώνεται από πάνω.
   //
   // Επιστρέφει ΣΤΟΙΧΕΙΟ (όχι component) — ίδιος λόγος με το renderEmptyOrders.
-  function renderTodayStats() {
+  //
+  // Χωρισμένο σε ΔΥΟ συναρτήσεις: το renderTodayStatsRow() είναι μόνο η γραμμή
+  // με τα τρία κουτάκια, χωρίς δικά της περιθώρια — έτσι την ξαναχρησιμοποιεί
+  // ΚΑΙ το renderEmptyOrders() (κολλητά κάτω από την κάρτα) ΚΑΙ το
+  // renderTodayStats() παρακάτω (ως ListFooterComponent όταν η λίστα έχει
+  // παραγγελίες, με τα δικά της περιθώρια λίστας).
+  function renderTodayStatsRow() {
     const box = {
       flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
       backgroundColor: theme.surface, borderRadius: 16,
@@ -1088,7 +1116,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     ];
 
     return (
-      <View style={{ flexDirection: 'row', gap: 8, marginHorizontal: 16, marginTop: 8, marginBottom: 20 }}>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
         {cells.map((c) => (
           <View key={c.key} style={box}>
             {c.icon}
@@ -1104,6 +1132,14 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             </View>
           </View>
         ))}
+      </View>
+    );
+  }
+
+  function renderTodayStats() {
+    return (
+      <View style={{ marginHorizontal: 16, marginTop: 8, marginBottom: 20 }}>
+        {renderTodayStatsRow()}
       </View>
     );
   }
@@ -1187,7 +1223,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // περισσεύει (χωρίς αυτό κολλάει στην κορυφή). Με παραγγελίες δεν αλλάζει τίποτα.
         contentContainerStyle={{ flexGrow: 1 }}
         ListEmptyComponent={renderEmptyOrders()}
-        ListFooterComponent={renderTodayStats()}
+        // Με άδεια λίστα το πλαίσιο «σήμερα» είναι ήδη ΜΕΣΑ στο
+        // renderEmptyOrders(), κολλητά κάτω από την κάρτα — αν έμπαινε ΚΑΙ
+        // εδώ θα εμφανιζόταν διπλό.
+        ListFooterComponent={showingEmpty ? null : renderTodayStats()}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
