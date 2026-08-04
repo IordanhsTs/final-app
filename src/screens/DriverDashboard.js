@@ -1006,7 +1006,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     const row = { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 15, paddingHorizontal: 8, borderRadius: 12 };
     const inner = (
       <>
-        <Feather name={icon} size={15} color={on ? theme.accent : theme.subtitle} />
+        {/* Ίδιος λόγος με το tabTextActiveDriver: μαύρο εικονίδιο στο φωτεινό
+            θέμα, χρυσό μένει μόνο στο σκούρο — αλλιώς θα «χανόταν» δίπλα σε
+            μαύρο κείμενο πάνω στο ίδιο χρυσό gradient περίγραμμα. */}
+        <Feather name={icon} size={15} color={on ? (isDarkMode ? theme.accent : theme.text) : theme.subtitle} />
         <Text style={[styles.tabText, { fontSize: 13, fontWeight: '600' }, on && styles.tabTextActiveDriver]}>{label}</Text>
       </>
     );

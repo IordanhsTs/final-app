@@ -107,7 +107,11 @@ export const getStyles = (isDark) => {
     },
     // (Τα παλιά tabActiveDarkDriver/tabActiveLightDriver αφαιρέθηκαν: η ενεργή
     //  καρτέλα ζωγραφίζεται πλέον με LinearGradient μέσα στο DriverDashboard.)
-    tabTextActiveDriver: { color: theme.accent, fontWeight: '900', letterSpacing: 1 },
+    // ΣΤΟ ΦΩΤΕΙΝΟ ΘΕΜΑ ΜΑΥΡΑ, όχι χρυσά (αίτημα πελάτη 04/08/2026): το χρυσό
+    // κείμενο πάνω στη χρυσή σκίαση του gradient περιγράμματος δυσκόλευε την
+    // ανάγνωση. Στο σκούρο θέμα το φόντο είναι navy, όχι χρυσό, οπότε εκεί
+    // παραμένει χρυσό όπως ήταν.
+    tabTextActiveDriver: { color: isDark ? theme.accent : theme.text, fontWeight: '900', letterSpacing: 1 },
     premiumButtonWrapper: { marginTop: 12, borderRadius: 12, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
     premiumButtonBackground: { height: 50, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     premiumButtonText: { fontSize: 14, fontWeight: '900', letterSpacing: 1.5, textTransform: 'uppercase' },
