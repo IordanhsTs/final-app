@@ -26,8 +26,12 @@ Notifications.setNotificationHandler({
     // Τα 'reassign_away' και 'cancel' ΔΕΝ έχουν in-app αντίστοιχο: ο διανομέας
     // απλώς βλέπει μια γραμμή να εξαφανίζεται από τη λίστα του, χωρίς εξήγηση.
     // Γι' αυτά κρατάμε ΚΑΙ ήχο ΚΑΙ banner — αλλιώς δεν θα μάθει ποτέ τον λόγο.
+    // Το 'driver_broadcast' (ανακοίνωση συναδέλφου: «έπαθα λάστιχο») έχει κι
+    // αυτό in-app παράθυρο με δικό του ήχο μία φορά — χωρίς τη σιγή εδώ, ο
+    // διανομέας θα άκουγε τον ίδιο ήχο δύο φορές με ανοιχτή την εφαρμογή.
     const kind = notification.request?.content?.data?.kind;
-    const hasInAppUi = kind === 'assign' || kind === 'reassign' || kind === 'message';
+    const hasInAppUi = kind === 'assign' || kind === 'reassign' || kind === 'message'
+      || kind === 'driver_broadcast';
     return {
       shouldShowBanner: !hasInAppUi,
       shouldShowList: !hasInAppUi,

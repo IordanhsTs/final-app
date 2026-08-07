@@ -18,6 +18,10 @@ const MENU_ITEMS = [
   { key: 'availability', label: 'Διαθεσιμότητα εβδομάδας', icon: 'calendar',   lib: 'feather' },
   { key: 'schedule',     label: 'Το πρόγραμμά μου',        icon: 'clipboard',  lib: 'feather' },
   { key: 'announcements',label: 'Ανακοινώσεις',            icon: 'megaphone-outline', lib: 'ionicons' },
+  // Ανακοίνωση ΠΡΟΣ τους άλλους διανομείς («έπαθα λάστιχο»). Μπαίνει δίπλα στις
+  // «Ανακοινώσεις» επειδή είναι το ίδιο πράγμα με ανάποδη φορά — εκεί διαβάζει
+  // ό,τι λέει το κέντρο, εδώ λέει ο ίδιος κάτι στους συναδέλφους.
+  { key: 'broadcast',    label: 'Ενημέρωση συναδέλφων',    icon: 'radio',      lib: 'feather' },
   { key: 'support',      label: 'Υποστήριξη',              icon: 'headset-outline',   lib: 'ionicons' },
 ];
 

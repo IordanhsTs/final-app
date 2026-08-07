@@ -15,6 +15,7 @@ import HistoryScreen from './HistoryScreen';
 import AvailabilityScreen from './AvailabilityScreen';
 import MyScheduleScreen from './MyScheduleScreen';
 import AnnouncementsScreen from './AnnouncementsScreen';
+import DriverBroadcastScreen from './DriverBroadcastScreen';
 import SupportScreen from './SupportScreen';
 
 const notificationSound = require('../../assets/notification.mp3');
@@ -90,6 +91,13 @@ function formatShiftClock(seconds) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/** «21:07» — η ώρα που στάλθηκε μια ανακοίνωση συναδέλφου. */
+function formatClockTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMode, setIsDarkMode }) {
   const styles = getStyles(isDarkMode);
   // Οι σκούρες επιφάνειες (header, μπάρες, modals) παίρνουν χρώμα από την παλέτα
@@ -102,6 +110,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const player = useAudioPlayer(notificationSound);
   const alarmPlayer = useAudioPlayer(alarmSound);
   const messagePlayer = useAudioPlayer(messageSound);
+  // ΤΕΤΑΡΤΟΣ player με το ΙΔΙΟ αρχείο ήχου, αποκλειστικά για την ανακοίνωση
+  // συναδέλφου. Ο πελάτης ζήτησε τον ήχο των μηνυμάτων — αλλά ο messagePlayer
+  // μπορεί εκείνη τη στιγμή να κάνει loop για μήνυμα του κέντρου (που επιμένει
+  // μέχρι το «ΟΚ»). Αν τον μοιραζόμασταν, ένα seekTo(0) εδώ θα έκοβε εκείνον
+  // τον συναγερμό στη μέση. Ξεχωριστός player = μηδενική παρεμβολή.
+  const colleaguePlayer = useAudioPlayer(messageSound);
 
   const [pendingOrders, setPendingOrders] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
@@ -161,6 +175,20 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   // State για μηνύματα από το Κέντρο Ελέγχου
   const [systemAlert, setSystemAlert] = useState(null);
+
+  // ── Ανακοινώσεις μεταξύ διανομέων (αίτημα πελάτη 08/08/2026) ───────────────
+  // ΟΥΡΑ και όχι μία τιμή: αν δύο συνάδελφοι μιλήσουν σχεδόν ταυτόχρονα, η
+  // δεύτερη ανακοίνωση θα έσβηνε την πρώτη πριν προλάβει να τη διαβάσει κανείς.
+  // Δείχνουμε την πρώτη, το «ΟΚ» την πετάει και εμφανίζεται η επόμενη.
+  const [driverBroadcasts, setDriverBroadcasts] = useState([]);
+  // Η ίδια ανακοίνωση ταξιδεύει από ΔΥΟ δρόμους (Realtime broadcast για ανοιχτή
+  // εφαρμογή, FCM push για κλειδωμένη οθόνη). Κρατάμε ποιες έχουμε ήδη δει ώστε
+  // να μη δείξουμε — και κυρίως να μην ηχήσουμε — την ίδια δύο φορές.
+  const seenBroadcastIds = useRef(new Set());
+  // Το κανάλι μέσω του οποίου ΣΤΕΛΝΕΙ ο διανομέας. Το Realtime απαιτεί να είσαι
+  // subscribed για να κάνεις broadcast, οπότε στέλνουμε από το ίδιο κανάλι που
+  // ήδη ακούει παρακάτω — δεύτερο κανάλι με το ίδιο topic θα ήταν διπλή σύνδεση.
+  const broadcastChannel = useRef(null);
   const [lastLocationUpdate, setLastLocationUpdate] = useState("Περιμένω στίγμα...");
   const [locationPermStatus, setLocationPermStatus] = useState('...');
   // Πράσινη/κόκκινη κουκκίδα δίπλα στο «Στίγμα»: πράσινη όσο φτάνουν φρέσκα GPS
@@ -256,18 +284,35 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       }
     };
 
+    // Ανακοίνωση συναδέλφου που ήρθε ως push. Όλα τα στοιχεία (όνομα, ώρα,
+    // κείμενο) ταξιδεύουν μέσα στο `data` του FCM — δεν υπάρχει πίνακας να
+    // ρωτήσουμε, το μήνυμα δεν αποθηκεύεται πουθενά.
+    const readDriverBroadcastPush = (notification, alreadySounded) => {
+      const data = notification?.request?.content?.data;
+      if (!data || data.kind !== 'driver_broadcast') return;
+      receiveDriverBroadcast({
+        id: data.broadcastId,
+        sender_id: data.senderId,
+        sender_name: data.sender,
+        message: data.message,
+        sent_at: data.sentAt,
+      }, alreadySounded);
+    };
+
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
       // Ο listener χτυπά και σε background (η εφαρμογή ζει ακόμα). ΤΟΤΕ όμως το
       // Android έχει ήδη ηχήσει. Το AppState είναι το μόνο αξιόπιστο κριτήριο —
       // δεν εξαρτάται από ανάγνωση της μπάρας ειδοποιήσεων ούτε από το OEM.
       rememberAssignmentPush(notification, AppState.currentState !== 'active');
+      readDriverBroadcastPush(notification, AppState.currentState !== 'active');
       fetchOrders();
     });
 
     const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
       // Tap στην ειδοποίηση ⇒ ήταν ορατή ⇒ το κανάλι ΕΠΑΙΞΕ τον ήχο.
       rememberAssignmentPush(response?.notification, true);
+      readDriverBroadcastPush(response?.notification, true);
       fetchOrders();
     });
 
@@ -332,6 +377,22 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       })
       .subscribe();
 
+    // ─── ΑΝΑΚΟΙΝΩΣΕΙΣ ΜΕΤΑΞΥ ΔΙΑΝΟΜΕΩΝ (BROADCAST) ───
+    // Ξεχωριστό κανάλι από το 'system_alerts' του κέντρου: άλλος αποστολέας,
+    // άλλη συμπεριφορά (ένας ήχος αντί για συναγερμό που επιμένει) — και έτσι
+    // δεν ακούνε τα καταστήματα, που είναι κι αυτά συνδρομητές στο system_alerts.
+    // Το ΙΔΙΟ κανάλι χρησιμεύει και για την ΑΠΟΣΤΟΛΗ (βλ. sendDriverBroadcast):
+    // το Realtime απαιτεί ενεργή συνδρομή για να επιτρέψει broadcast.
+    const driverBroadcastChannel = supabase
+      .channel('driver_broadcasts')
+      .on('broadcast', { event: 'driver_message' }, (payload) => {
+        // Το websocket ζει και στο παρασκήνιο: αν φτάσει από εκεί, τον ήχο τον
+        // έχει ήδη αναλάβει το push του λειτουργικού.
+        receiveDriverBroadcast(payload.payload, AppState.currentState !== 'active');
+      })
+      .subscribe();
+    broadcastChannel.current = driverBroadcastChannel;
+
     // ─── ΛΗΨΗ ΑΛΛΑΓΩΝ GPS ΣΕ ΠΡΑΓΜΑΤΙΚΟ ΧΡΟΝΟ ΓΙΑ MONITORING ───
     const driverChannel = supabase
       .channel(`driver_monitor_${currentUser.id}`)
@@ -351,6 +412,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       if (responseListener) responseListener.remove();
       supabase.removeChannel(channel);
       supabase.removeChannel(systemAlertChannel);
+      supabase.removeChannel(driverBroadcastChannel);
+      broadcastChannel.current = null;
       supabase.removeChannel(driverChannel);
       appStateSubscription.remove();
     };
@@ -524,6 +587,109 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   // Σταματάμε κάθε ήχο/δόνηση όταν φεύγει η οθόνη, ώστε να μη μείνει να χτυπά.
   useEffect(() => stopAlarm, []);
+
+  // ── Ανακοινώσεις μεταξύ διανομέων ──────────────────────────────────────────
+  // Ο πελάτης το ζήτησε ρητά «όπως το απλό μήνυμα της διαγραφής παραγγελίας»:
+  // ΜΙΑ φορά ο ήχος των μηνυμάτων, τίποτα που να επιμένει. Ο 20δευτερος
+  // συναγερμός και το loop του μηνύματος κέντρου είναι για «σταμάτα ό,τι κάνεις» —
+  // ένα «πάω για βενζίνη» δεν είναι αυτό, και αν χτυπούσε έτσι θα σταματούσαν
+  // όλοι οι διανομείς στον δρόμο για μια πληροφορία.
+  function playColleagueChime() {
+    Vibration.vibrate([0, 400, 200, 400]); // μία φορά — ΟΧΙ repeat
+    try {
+      if (colleaguePlayer) {
+        colleaguePlayer.loop = false;
+        colleaguePlayer.volume = 1.0;
+        colleaguePlayer.seekTo(0);
+        colleaguePlayer.play();
+      }
+    } catch (e) { console.log('Audio Error:', e); }
+  }
+
+  /**
+   * Μία είσοδος για τις δύο διαδρομές (Realtime broadcast + FCM push). Κόβει
+   * διπλότυπα και αγνοεί ό,τι έστειλε ο ίδιος ο διανομέας.
+   *
+   * `alreadySounded`: ΤΟ ΑΝΤΙΣΤΟΙΧΟ ΤΟΥ pushAlreadySoundedIds ΤΗΣ ΑΝΑΘΕΣΗΣ.
+   * Με την εφαρμογή εκτός προσκηνίου τον ήχο τον παίζει το ίδιο το Android από
+   * το κανάλι messages_urgent_v1, εντελώς έξω από το expo-audio. Αν ο διανομέας
+   * πατήσει αμέσως την ειδοποίηση, η εφαρμογή γίνεται 'active' ΕΝΩ ο ήχος του
+   * λειτουργικού παίζει ακόμα — και ένας δεύτερος από εδώ θα έπεφτε πάνω του.
+   * Αυτό ακριβώς ήταν το διπλό χτύπημα που ανέφερε ο πελάτης στις αναθέσεις
+   * (30/07/2026), γι' αυτό το κριτήριο δεν είναι μόνο το AppState.
+   */
+  function receiveDriverBroadcast(raw, alreadySounded = false) {
+    if (!raw || !raw.message) return;
+    if (raw.sender_id && String(raw.sender_id) === String(currentUser.id)) return;
+
+    const id = String(raw.id || `${raw.sender_name}-${raw.sent_at}`);
+    if (seenBroadcastIds.current.has(id)) return;
+    seenBroadcastIds.current.add(id);
+    // Το Set δεν αδειάζει μόνο του και η εφαρμογή ζει όλη τη βάρδια: κρατάμε τα
+    // τελευταία 50 ids, όσα χρειάζονται για το dedup των δύο διαδρομών.
+    if (seenBroadcastIds.current.size > 50) {
+      seenBroadcastIds.current.delete(seenBroadcastIds.current.values().next().value);
+    }
+
+    setDriverBroadcasts((queue) => [...queue, {
+      id,
+      sender: raw.sender_name || 'Συνάδελφος',
+      message: String(raw.message),
+      // Αν λείψει η ώρα αποστολής, η ώρα λήψης είναι πρακτικά η ίδια (το push
+      // ταξιδεύει σε δευτερόλεπτα) — καλύτερα από κενό πεδίο.
+      sentAt: raw.sent_at || new Date().toISOString(),
+    }]);
+
+    if (!alreadySounded && AppState.currentState === 'active') playColleagueChime();
+  }
+
+  /**
+   * Αποστολή ανακοίνωσης προς τους υπόλοιπους. ΔΥΟ διαδρομές επίτηδες:
+   *   • Realtime broadcast → φτάνει ακαριαία σε όποιον έχει ανοιχτή την εφαρμογή.
+   *   • Edge function (FCM) → φτάνει με κλειδωμένη/κλειστή οθόνη, δηλαδή στην
+   *     κανονική περίπτωση ενός διανομέα που οδηγεί.
+   * Καμία από τις δύο δεν γράφει γραμμή σε πίνακα: το μήνυμα δεν αποθηκεύεται.
+   */
+  async function sendDriverBroadcast(text) {
+    const message = String(text || '').trim();
+    if (!message) return { liveOk: false, pushed: 0, pushError: null };
+
+    const payload = {
+      // Το ίδιο id ταξιδεύει και στις δύο διαδρομές — από αυτό αναγνωρίζει ο
+      // παραλήπτης ότι πρόκειται για την ΙΔΙΑ ανακοίνωση.
+      id: `${currentUser.id}-${Date.now()}`,
+      sender_id: currentUser.id,
+      sender_name: currentUser.full_name,
+      message,
+      sent_at: new Date().toISOString(),
+    };
+
+    let liveOk = false;
+    try {
+      const ch = broadcastChannel.current;
+      if (ch) {
+        const res = await ch.send({ type: 'broadcast', event: 'driver_message', payload });
+        liveOk = res === 'ok';
+      }
+    } catch (e) {
+      console.log('Broadcast (realtime) error:', e);
+    }
+
+    let pushed = 0;
+    let pushError = null;
+    try {
+      const { data, error } = await supabase.functions.invoke('send-driver-broadcast', {
+        body: { broadcastId: payload.id, message, sentAt: payload.sent_at },
+      });
+      if (error) pushError = error;
+      else pushed = Number(data?.sent) || 0;
+    } catch (e) {
+      pushError = e;
+    }
+    if (pushError) console.log('Broadcast (push) error:', pushError);
+
+    return { liveOk, pushed, pushError };
+  }
 
   // ── Κόκκινη κουκκίδα ανακοινώσεων ─────────────────────────────────────────
   // Οι ανακοινώσεις ΔΕΝ στέλνουν push (απόφαση 03/08/2026), οπότε η μόνη
@@ -1342,6 +1508,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             onBack={() => setActiveScreen(null)}
             onRead={refreshAnnouncementBadge}
           />
+        ) : activeScreen === 'broadcast' ? (
+          <DriverBroadcastScreen
+            currentUser={currentUser}
+            isDarkMode={isDarkMode}
+            onBack={() => setActiveScreen(null)}
+            onSend={sendDriverBroadcast}
+          />
         ) : activeScreen === 'support' ? (
           <SupportScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
         ) : null}
@@ -1438,6 +1611,63 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <TouchableOpacity
               style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
               onPress={() => { stopAlarm(); setAssignmentAlert(null); setActiveTab('my_orders'); }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── ΑΝΑΚΟΙΝΩΣΗ ΑΠΟ ΣΥΝΑΔΕΛΦΟ ───
+          Χωρίς συναγερμό που επιμένει: ο ήχος έχει ήδη παίξει ΜΙΑ φορά. Το
+          παράθυρο περιμένει ήσυχα το «ΟΚ» — μπορεί ο διανομέας να οδηγεί.
+          Το ΟΝΟΜΑ και η ΩΡΑ είναι το κύριο περιεχόμενο (ρητό αίτημα πελάτη):
+          χωρίς αυτά, «πάω για βενζίνη» δεν σημαίνει τίποτα. */}
+      <Modal visible={driverBroadcasts.length > 0} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 400,
+            backgroundColor: theme.surface,
+            borderRadius: 24,
+            padding: 24,
+            borderTopWidth: 4,
+            borderTopColor: '#38BDF8',
+            elevation: 10,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 16 }}>
+              <Feather name="radio" size={20} color="#38BDF8" />
+              <Text style={{ fontSize: 19, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', flex: 1 }}>
+                Ενημέρωση συναδέλφου
+              </Text>
+              {/* Πόσες ακόμα περιμένουν πίσω από αυτή — αλλιώς το παράθυρο θα
+                  «ξαναεμφανιζόταν» μετά το ΟΚ χωρίς εξήγηση. */}
+              {driverBroadcasts.length > 1 ? (
+                <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(56,189,248,0.18)' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '900', color: '#38BDF8' }}>+{driverBroadcasts.length - 1}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <Feather name="user" size={13} color={isDarkMode ? '#C5A066' : '#8A7347'} />
+                <Text style={{ fontSize: 15, fontWeight: '900', color: isDarkMode ? '#C5A066' : '#8A7347', flexShrink: 1 }}>
+                  {driverBroadcasts[0]?.sender}
+                </Text>
+                <Feather name="clock" size={12} color={theme.subtitle} style={{ marginLeft: 4 }} />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: theme.subtitle }}>
+                  {formatClockTime(driverBroadcasts[0]?.sentAt)}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 16, lineHeight: 24, color: isDarkMode ? '#F0EBE2' : '#1E1A14' }}>
+                {driverBroadcasts[0]?.message}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+              onPress={() => setDriverBroadcasts((queue) => queue.slice(1))}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
             </TouchableOpacity>
