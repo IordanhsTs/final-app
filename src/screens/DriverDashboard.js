@@ -715,13 +715,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   async function fetchOrders() {
     setRefreshing(true);
     try {
-      // Η διεύθυνση του καταστήματος μπαίνει στην κάρτα (μικρά γράμματα, κάτω):
-      // ο διανομέας θέλει να ξέρει ΑΠΟ ΠΟΥ παραλαμβάνει, όχι μόνο το όνομα.
-      // latitude/longitude: για ΠΛΟΗΓΗΣΗ ΣΕ ΣΥΝΤΕΤΑΓΜΕΝΕΣ (βλ. openNavigation).
-      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address, latitude, longitude');
+      // Η διεύθυνση του καταστήματος μπαίνει στην κάρτα, στη γραμμή της παράδοσης
+      // («Κοντοπούλου 4 → διεύθυνση πελάτη»): ο διανομέας θέλει να ξέρει ΑΠΟ ΠΟΥ
+      // παραλαμβάνει, όχι μόνο το όνομα. Είναι ΚΑΘΑΡΑ ΓΙΑ ΤΑ ΜΑΤΙΑ — η πλοήγηση
+      // πάει πάντα στον πελάτη, οπότε οι συντεταγμένες του καταστήματος δεν
+      // χρειάζονται εδώ (βλ. openNavigation).
+      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address');
       const storesMap = {};
       if (storesList) storesList.forEach(s => {
-        storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address, latitude: s.latitude, longitude: s.longitude };
+        storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address };
       });
 
       // ΠΑΛΙΟΤΕΡΕΣ ΠΡΩΤΑ (ascending): η παραγγελία που περιμένει περισσότερο πρέπει
@@ -736,8 +738,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         store_name: storesMap[order.store_id]?.name || 'Κεντρικό Κατάστημα',
         store_phone: storesMap[order.store_id]?.phone || null,
         store_address: storesMap[order.store_id]?.address || null,
-        store_latitude: storesMap[order.store_id]?.latitude ?? null,
-        store_longitude: storesMap[order.store_id]?.longitude ?? null,
       }));
 
       const mineMapped = withStore(mine);
@@ -940,7 +940,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     setConfirmModalVisible(true);
   };
 
-  // Άνοιγμα πλοήγησης προς οποιαδήποτε διεύθυνση (κατάστημα ή πελάτη).
+  // Άνοιγμα πλοήγησης προς τη διεύθυνση της παραγγελίας — πάντα τον πελάτη,
+  // πριν και μετά την παραλαβή (βλ. navTarget στο renderOrderItem).
   //
   // ΣΥΝΤΕΤΑΓΜΕΝΕΣ ΠΡΩΤΑ (30/07/2026). Πριν, στέλναμε ΜΟΝΟ κείμενο και το Google
   // Maps το γεωκωδικοποιούσε από την αρχή — αγνοώντας το σημείο που είχε ήδη
@@ -950,11 +951,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   //     καθόλου, γιατί ως ελεύθερο κείμενο δεν αντιστοιχούν σε διεύθυνση
   // Με συντεταγμένες η πλοήγηση δείχνει ΑΚΡΙΒΩΣ το σημείο της χρέωσης.
   // Το κείμενο μένει ως fallback για παλιές παραγγελίες χωρίς lat/lon.
-  const openNavigation = (destination, toStore, lat, lon) => {
+  const openNavigation = (destination, lat, lon) => {
     const hasCoords = typeof lat === 'number' && typeof lon === 'number';
     setConfirmConfig({
       title: 'Πλοήγηση',
-      message: `Έναρξη πλοήγησης προς ${toStore ? 'το κατάστημα' : 'τον πελάτη'}:\n${destination}`,
+      message: `Έναρξη πλοήγησης προς τον πελάτη:\n${destination}`,
       confirmLabel: 'Πλοήγηση',
       onConfirm: () => {
         setConfirmModalVisible(false);
@@ -989,14 +990,21 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     // επιστρέφει ποτέ αρνητικά (απόκλιση ρολογιού κινητού/server).
     const { activeMins, acceptedMins, totalMins } = orderDurations(item, now);
 
-    // Πριν την παραλαβή πλοηγούμαστε στο ΚΑΤΑΣΤΗΜΑ, μετά στον ΠΕΛΑΤΗ.
     const pickedUp = !!item.picked_up_at;
-    const toStore = !pickedUp && !!item.store_address;
-    const navTarget = toStore ? item.store_address : item.address;
-    // Οι συντεταγμένες του ΙΔΙΟΥ προορισμού με το navTarget — αλλιώς θα
-    // πλοηγούσαμε στον πελάτη ενώ δείχνουμε τη διεύθυνση του καταστήματος.
-    const navLat = toStore ? item.store_latitude : item.latitude;
-    const navLon = toStore ? item.store_longitude : item.longitude;
+
+    // Η ΠΛΟΗΓΗΣΗ ΠΑΕΙ ΠΑΝΤΑ ΣΤΟΝ ΠΕΛΑΤΗ (απόφαση πελάτη 08/08/2026).
+    //
+    // Παλιά ήταν `!pickedUp && !!store_address ? κατάστημα : πελάτης`, δηλαδή
+    // πριν την παραλαβή πλοηγούσε στο μαγαζί. Στην πράξη δεν ενεργοποιήθηκε
+    // ποτέ, γιατί το `stores.address` ήταν κενό σε ΟΛΑ τα καταστήματα — και
+    // μόλις αρχίσουμε να το συμπληρώνουμε (για να φαίνεται στην κάρτα) η
+    // πλοήγηση θα άλλαζε προορισμό από μόνη της, χωρίς να το ζητήσει κανείς.
+    // Ο διανομέας ξέρει πού είναι τα μαγαζιά· αυτό που θέλει από το κουμπί
+    // είναι η διεύθυνση της παραγγελίας. Άρα ο προορισμός ΔΕΝ εξαρτάται πια
+    // από το αν έχει καταχωρηθεί διεύθυνση καταστήματος.
+    const navTarget = item.address;
+    const navLat = item.latitude;
+    const navLon = item.longitude;
 
     // Χρώματα χρόνου: Πράσινο μέχρι 9 λεπτά, Κόκκινο από 10 και πάνω. Ολοκληρωμένες πάντα πράσινες.
     // Πλέον ΔΕΝ εξαρτώνται από το θέμα — η κάρτα είναι άσπρη και στα δύο.
@@ -1013,10 +1021,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     return (
       <View style={[styles.orderCard, isScheduled && { opacity: 0.92, borderWidth: 1, borderStyle: 'dashed', borderColor: '#D1D5DB' }]}>
-        {/* ── ΠΑΡΑΛΑΒΗ: κατάστημα + η διεύθυνσή του από κάτω ──
-            Η διεύθυνση του καταστήματος ανέβηκε ΕΔΩ (κάτω από το όνομα, όπου ανήκει)
-            και δεν κάθεται πια κάτω από τη διεύθυνση του πελάτη — έτσι η κάρτα
-            χωρίζεται καθαρά σε «από πού» και «πού». */}
+        {/* ── ΠΑΡΑΛΑΒΗ: όνομα καταστήματος ──
+            Η διεύθυνση του καταστήματος ΔΕΝ είναι πια εδώ (κάτω από το όνομα):
+            μετακινήθηκε στη γραμμή της παράδοσης ως «κατάστημα → πελάτης»
+            (αίτημα πελάτη 08/08/2026), ώστε το «από πού» και το «πού» να
+            διαβάζονται μαζί χωρίς η κάρτα να ψηλώνει κατά μία σειρά. */}
         {/* ΟΛΑ ΣΕ ΜΙΑ ΓΡΑΜΜΗ (αίτημα πελάτη 02/08/2026): τηλέφωνο κολλητά στο
             όνομα, πλοήγηση + χρόνος μαζί δεξιά. Πριν, τα δύο κουμπιά και ο χρόνος
             ήταν δύο ξεχωριστές σειρές δεξιά και ψήλωναν την κάρτα.
@@ -1042,18 +1051,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 </TouchableOpacity>
               ) : null}
             </View>
-
-            {item.store_address ? (
-              <Text style={{ fontSize: 13, color: CardColors.muted, marginTop: 6, marginLeft: 33 }} numberOfLines={1}>
-                <Feather name="map-pin" size={12} color={CardColors.muted} /> {item.store_address}
-              </Text>
-            ) : null}
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {!isScheduled && (
               <TouchableOpacity
-                onPress={() => openNavigation(navTarget, toStore, navLat, navLon)}
+                onPress={() => openNavigation(navTarget, navLat, navLon)}
                 style={roundBtn}
                 accessibilityLabel="Πλοήγηση"
               >
@@ -1106,8 +1109,23 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           </View>
         </View>
 
+        {/* «Κοντοπούλου 4 → Καραβαγγέλη 12» — από πού παραλαμβάνει, πού παραδίδει,
+            σε ΜΙΑ γραμμή (αίτημα πελάτη 08/08/2026): έτσι ο διανομέας βλέπει το
+            κατάστημα ως τοποθεσία χωρίς η κάρτα να ψηλώσει κατά μία σειρά.
+            Η διεύθυνση του καταστήματος μπαίνει μικρή/ξεθωριασμένη και του πελάτη
+            μεγάλη — ο ΠΡΟΟΡΙΣΜΟΣ παραμένει η κύρια πληροφορία της κάρτας.
+            Το «→» είναι χαρακτήρας και όχι εικονίδιο: μέσα σε <Text> με δύο
+            διαφορετικά fontSize ένα εικονίδιο κάθεται στραβά στο baseline.
+            Καταστήματα χωρίς καταχωρημένη διεύθυνση: η γραμμή μένει ίδια με πριν. */}
         <Text style={[styles.orderAddress, { color: CardColors.text, fontSize: 18, marginBottom: 0 }]}>
-          <Feather name="map-pin" size={15} color={CardColors.text} /> {item.address}
+          <Feather name="map-pin" size={15} color={CardColors.text} />{' '}
+          {item.store_address ? (
+            <Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: CardColors.muted }}>{item.store_address}</Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: CardColors.faint }}>{'  →  '}</Text>
+            </Text>
+          ) : null}
+          {item.address}
         </Text>
 
         {item.comments ? (
