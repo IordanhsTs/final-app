@@ -17,6 +17,7 @@ import MyScheduleScreen from './MyScheduleScreen';
 import AnnouncementsScreen from './AnnouncementsScreen';
 import DriverBroadcastScreen from './DriverBroadcastScreen';
 import SupportScreen from './SupportScreen';
+import VehicleSelectScreen from './VehicleSelectScreen';
 
 const notificationSound = require('../../assets/notification.mp3');
 const alarmSound = require('../../assets/assignment.wav');
@@ -1517,6 +1518,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           />
         ) : activeScreen === 'support' ? (
           <SupportScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+        ) : activeScreen === 'vehicle' ? (
+          // Αλλαγή μηχανής στη μέση της βάρδιας (χάλασε το ένα, πήρε το άλλο).
+          // Ίδιο component με το φράγμα της εκκίνησης — εδώ όμως με «πίσω».
+          <VehicleSelectScreen
+            isDarkMode={isDarkMode}
+            driverName={currentUser.full_name}
+            onBack={() => setActiveScreen(null)}
+            onDone={() => setActiveScreen(null)}
+          />
         ) : null}
       </Modal>
 

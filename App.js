@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Alert, View, ActivityIndicator, AppState, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
@@ -11,6 +11,7 @@ import { readNativeTokens, cacheDriverProfile, readCachedDriverProfile } from '.
 // Εισαγωγή των Οθονών
 import LoginScreen from './src/screens/LoginScreen';
 import DriverDashboard from './src/screens/DriverDashboard';
+import VehicleSelectScreen from './src/screens/VehicleSelectScreen';
 import { Colors } from './src/styles/globalStyles';
 
 // ─── Ρύθμιση notification handler (για foreground notifications) ──────────────
@@ -74,6 +75,14 @@ export default function App() {
   // βάσης: τότε ΔΕΝ δηλώνουμε τη συσκευή ως ενεργή, γιατί δεν ξέρουμε αν ο
   // λογαριασμός έχει στο μεταξύ μετακομίσει σε άλλο κινητό.
   const deviceClaimAllowed = useRef(true);
+
+  // ── ΔΗΛΩΣΗ ΜΗΧΑΝΗΜΑΤΟΣ ΒΑΡΔΙΑΣ ────────────────────────────────────────────
+  // ΠΡΟΕΠΙΛΟΓΗ `false` (fail-open): αν το ερώτημα δεν απαντηθεί —
+  // δίκτυο, παλιά βάση χωρίς τη migration 0016 — ο διανομέας μπαίνει κανονικά
+  // στη δουλειά του. Το φράγμα σηκώνεται ΜΟΝΟ όταν η βάση πει ρητά ότι πρέπει.
+  const [needsVehicle, setNeedsVehicle] = useState(false);
+  const vehicleCheckedAt = useRef(0);
+  const dismissVehiclePrompt = useCallback(() => setNeedsVehicle(false), []);
 
   // Τελευταία ελπίδα όταν το token του JS είναι άκυρο: το native GPS service
   // κρατά τη δική του, μόνιμα αποθηκευμένη έκδοση (SharedPreferences) — αν αυτό
@@ -225,6 +234,42 @@ export default function App() {
       } catch (_) {}
     })();
   }, [currentUser]);
+
+  // --- ΜΗΧΑΝΑΚΙ ΒΑΡΔΙΑΣ: πρέπει να ρωτήσουμε τώρα; ---
+  // Ο κανόνας ζει στη βάση (`driver_vehicle_state`, migration 0016) και όχι εδώ:
+  // εξαρτάται από το ίδιο 30λεπτο κατώφλι σιωπής με τον χιλιομετρητή, και δύο
+  // αντίγραφα του ίδιου κανόνα θα απέκλιναν στην πρώτη αλλαγή.
+  //
+  // ΓΙΑΤΙ ΚΑΙ ΣΤΟ AppState: η σύνδεση είναι μόνιμη και το κινητό μπορεί να μείνει
+  // ανοιχτό για μέρες — χωρίς επανέλεγχο στην επιστροφή στο προσκήνιο, η
+  // ερώτηση της επόμενης μέρας δεν θα εμφανιζόταν ποτέ.
+  useEffect(() => {
+    if (!currentUser) {
+      setNeedsVehicle(false);
+      vehicleCheckedAt.current = 0;
+      return;
+    }
+
+    const check = async () => {
+      vehicleCheckedAt.current = Date.now();
+      try {
+        const { data, error } = await supabase.rpc('driver_vehicle_state');
+        if (error) return;                 // fail-open: καμία ερώτηση, καμία ενόχληση
+        const row = Array.isArray(data) ? data[0] : data;
+        // Μόνο σήκωμα, ποτέ κατέβασμα: το φράγμα το κατεβάζει η απάντηση του
+        // διανομέα. Ένας καθυστερημένος έλεγχος δεν πρέπει να το ξανανοίξει.
+        if (row && row.needs_prompt) setNeedsVehicle(true);
+      } catch (_) {}
+    };
+    check();
+
+    const sub = AppState.addEventListener('change', (next) => {
+      // 5λεπτο φρένο: το AppState χτυπά και σε στιγμιαία εναλλαγή εφαρμογών
+      // (π.χ. άνοιγμα του χάρτη πλοήγησης και επιστροφή).
+      if (next === 'active' && Date.now() - vehicleCheckedAt.current > 5 * 60 * 1000) check();
+    });
+    return () => sub.remove();
+  }, [currentUser, backendVersion]);
 
   // --- LISTEN FOR ADMIN DEACTIVATION ---
   useEffect(() => {
@@ -463,13 +508,29 @@ export default function App() {
     );
   }
 
+  // Το φράγμα μπαίνει ΠΑΝΩ από την αρχική και όχι στη θέση της: έτσι το GPS, τα
+  // push και το realtime έχουν ήδη ξεκινήσει όσο ο διανομέας απαντά, και η
+  // απάντηση βάφει τη βάρδια που έχει ήδη ανοίξει το πρώτο στίγμα — αντί να
+  // αφήνει πίσω της μια δεύτερη, μονόλεπτη βάρδια κάθε πρωί.
+  //
+  // Απόλυτο overlay και ΟΧΙ native <Modal>: το ίδιο μάθημα με το DriverMenu
+  // (04/08/2026) — το native dim του Modal δεν καθάριζε πάντα και άφηνε
+  // σκουρόχρωμα ίχνη σε ό,τι υπήρχε από κάτω.
   return (
-    <DriverDashboard
-      key={backendVersion}
-      currentUser={currentUser}
-      setCurrentUser={setCurrentUser}
-      isDarkMode={isDarkMode}
-      setIsDarkMode={setIsDarkMode}
-    />
+    <View style={{ flex: 1 }}>
+      <DriverDashboard
+        key={backendVersion}
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
+      />
+
+      {needsVehicle ? (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000, elevation: 1000 }}>
+          <VehicleSelectScreen isDarkMode={isDarkMode} onDone={dismissVehiclePrompt} />
+        </View>
+      ) : null}
+    </View>
   );
 }

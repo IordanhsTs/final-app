@@ -14,6 +14,9 @@ import { Colors } from '../styles/globalStyles';
 
 const MENU_ITEMS = [
   { key: 'home',         label: 'Αρχική',                  icon: 'home',       lib: 'feather' },
+  // Η δήλωση γίνεται μόνη της όταν πιάνει δουλειά· εδώ μπαίνει για την αλλαγή
+  // στη μέση της μέρας — αλλιώς η μόνη διέξοδος θα ήταν logout/login.
+  { key: 'vehicle',      label: 'Μηχανάκι βάρδιας',        icon: 'truck',      lib: 'feather' },
   { key: 'history',      label: 'Ιστορικό & Στατιστικά',   icon: 'pie-chart',  lib: 'feather' },
   { key: 'availability', label: 'Διαθεσιμότητα εβδομάδας', icon: 'calendar',   lib: 'feather' },
   { key: 'schedule',     label: 'Το πρόγραμμά μου',        icon: 'clipboard',  lib: 'feather' },
