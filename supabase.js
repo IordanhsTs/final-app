@@ -307,6 +307,7 @@ export async function clearDriverPresenceEverywhere(driverId) {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
             Prefer: 'return=minimal',
+            'Content-Profile': getTenantSchema(),
           },
           body: JSON.stringify({ is_active: false, fcm_token: null }),
         });

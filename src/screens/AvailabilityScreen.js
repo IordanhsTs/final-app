@@ -348,7 +348,14 @@ export default function AvailabilityScreen({ currentUser, isDarkMode, onBack }) 
               disabled={locked}
               onValueChange={(v) => {
                 patchDay(date, { enabled: v });
-                if (!v && expanded === date) setExpanded(null);
+                // Client feedback 08/08: η επιλογή ΣΥΓΚΕΚΡΙΜΕΝΕΣ/ΟΛΗ ΤΗΝ ΗΜΕΡΑ πρέπει
+                // να φαίνεται αμέσως μόλις ενεργοποιείς τη μέρα — όχι με δεύτερο κλικ
+                // στο βελάκι. Ανοίγουμε το panel αυτόματα εδώ.
+                if (v) {
+                  setExpanded(date);
+                } else if (expanded === date) {
+                  setExpanded(null);
+                }
               }}
               trackColor={{ false: '#6B7280', true: theme.accent }}
               thumbColor="#FFFFFF"

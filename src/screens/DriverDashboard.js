@@ -1088,9 +1088,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             {item.payment_method ? (
               <View style={{
                 backgroundColor: item.payment_method === 'cash' ? CardColors.okBg : CardColors.cardBg,
-                paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8,
+                paddingHorizontal: 7, paddingVertical: 3, borderRadius: 7,
               }}>
-                <Text style={{ fontWeight: '900', color: item.payment_method === 'cash' ? CardColors.okText : CardColors.cardText, fontSize: 10, letterSpacing: 0.6 }}>
+                <Text style={{ fontWeight: '900', color: item.payment_method === 'cash' ? CardColors.okText : CardColors.cardText, fontSize: 9, letterSpacing: 0.5 }}>
                   {item.payment_method === 'cash' ? 'ΜΕΤΡΗΤΑ' : 'ΚΑΡΤΑ'}
                 </Text>
               </View>
@@ -1109,22 +1109,19 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           </View>
         </View>
 
-        {/* «Κοντοπούλου 4 → Καραβαγγέλη 12» — από πού παραλαμβάνει, πού παραδίδει,
-            σε ΜΙΑ γραμμή (αίτημα πελάτη 08/08/2026): έτσι ο διανομέας βλέπει το
-            κατάστημα ως τοποθεσία χωρίς η κάρτα να ψηλώσει κατά μία σειρά.
-            Η διεύθυνση του καταστήματος μπαίνει μικρή/ξεθωριασμένη και του πελάτη
-            μεγάλη — ο ΠΡΟΟΡΙΣΜΟΣ παραμένει η κύρια πληροφορία της κάρτας.
-            Το «→» είναι χαρακτήρας και όχι εικονίδιο: μέσα σε <Text> με δύο
-            διαφορετικά fontSize ένα εικονίδιο κάθεται στραβά στο baseline.
-            Καταστήματα χωρίς καταχωρημένη διεύθυνση: η γραμμή μένει ίδια με πριν. */}
+        {/* Διεύθυνση καταστήματος σε ΔΙΚΗ ΤΗΣ, μικρή/ξεθωριασμένη γραμμή, χωρίς «→»
+            (αίτημα πελάτη 08/08/2026 — το μονογραμμο layout της ίδιας μέρας βγήκε
+            ακόμα πιο συμπυκνωμένο). Η διεύθυνση παράδοσης μένει η κύρια, μεγάλη
+            πληροφορία της κάρτας. Καταστήματα χωρίς καταχωρημένη διεύθυνση: δεν
+            εμφανίζεται καθόλου η πρώτη γραμμή. */}
+        {item.store_address ? (
+          <Text style={{ fontSize: 12, fontWeight: '700', color: CardColors.muted, marginBottom: 2 }}>
+            <Feather name="map-pin" size={11} color={CardColors.muted} />{' '}
+            {item.store_address}
+          </Text>
+        ) : null}
         <Text style={[styles.orderAddress, { color: CardColors.text, fontSize: 18, marginBottom: 0 }]}>
           <Feather name="map-pin" size={15} color={CardColors.text} />{' '}
-          {item.store_address ? (
-            <Text>
-              <Text style={{ fontSize: 14, fontWeight: '700', color: CardColors.muted }}>{item.store_address}</Text>
-              <Text style={{ fontSize: 14, fontWeight: '700', color: CardColors.faint }}>{'  →  '}</Text>
-            </Text>
-          ) : null}
           {item.address}
         </Text>
 
@@ -1462,7 +1459,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         extraData={now}
         // flexGrow: 1 ώστε η άδεια κατάσταση να κεντράρεται σε ΟΛΟ το ύψος που
         // περισσεύει (χωρίς αυτό κολλάει στην κορυφή). Με παραγγελίες δεν αλλάζει τίποτα.
-        contentContainerStyle={{ flexGrow: 1 }}
+        // paddingBottom: client feedback 08/08 — το πλαίσιο «σήμερα» έκρυβε πίσω από
+        // το gesture bar σε τηλέφωνα χωρίς κλασικά back/home/recents (Samsung S23).
+        // Δεν έχουμε το react-native-safe-area-context (native module, θα χρειαζόταν
+        // νέο EAS build) — γενναιόδωρο σταθερό padding αντί για πραγματικό inset,
+        // αρκετό να καλύψει τυπικό ύψος gesture bar σε Android.
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: Platform.OS === 'android' ? 40 : 24 }}
         ListEmptyComponent={renderEmptyOrders()}
         // Με άδεια λίστα το πλαίσιο «σήμερα» είναι ήδη ΜΕΣΑ στο
         // renderEmptyOrders(), κολλητά κάτω από την κάρτα — αν έμπαινε ΚΑΙ

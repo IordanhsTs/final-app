@@ -1,14 +1,15 @@
 import React from 'react';
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../styles/globalStyles';
-import { ScreenHeader, EmptyState, InfoBox } from './ScreenShell';
+import { ScreenHeader, InfoBox, PrimaryButton } from './ScreenShell';
 
-// ── Υποστήριξη — σκόπιμα άδεια (αίτημα πελάτη 03/08/2026) ───────────────────
-// Ο πελάτης φαντάζεται έναν υπάλληλο γραφείου διαθέσιμο κάποιες μέρες, αλλά δεν
-// έχει αποφασιστεί τίποτα (ποιες ώρες, με ποιον τρόπο επικοινωνίας). Μπαίνει η
-// θέση στο μενού με ειλικρινές μήνυμα αντί για μισοφτιαγμένη λειτουργία που θα
-// έστελνε τον διανομέα σε αδιέξοδο μέσα στη βάρδια.
+// ── Υποστήριξη — απλό κουμπί κλήσης (client feedback 08/08/2026) ────────────
+// Πριν ήταν σκόπιμα άδεια (βλ. ιστορικό commit): ο πελάτης δεν είχε αποφασίσει
+// ωράριο/τρόπο επικοινωνίας. Τώρα έδωσε ρητά το 23850-22500 «για αρχή» — απλό
+// κουμπί κλήσης, εύκολο να αλλάξει το νούμερο αργότερα.
+const SUPPORT_PHONE = '2385022500';
+const SUPPORT_PHONE_DISPLAY = '23850-22500';
 
 export default function SupportScreen({ currentUser, isDarkMode, onBack }) {
   const theme = Colors[isDarkMode ? 'dark' : 'light'];
@@ -25,17 +26,27 @@ export default function SupportScreen({ currentUser, isDarkMode, onBack }) {
           </Text>
         </View>
 
-        <EmptyState
+        <View style={{ alignItems: 'center', paddingHorizontal: 16, marginBottom: 24 }}>
+          <Text style={{ fontSize: 15, color: theme.subtitle, textAlign: 'center', marginBottom: 20 }}>
+            Για οτιδήποτε προκύψει στη βάρδια, κάλεσε το κέντρο ελέγχου.
+          </Text>
+          <Text style={{ fontSize: 26, fontWeight: '900', color: theme.text, letterSpacing: 1 }}>
+            {SUPPORT_PHONE_DISPLAY}
+          </Text>
+        </View>
+
+        <PrimaryButton
           isDarkMode={isDarkMode}
-          icon="tool"
-          title="Έρχεται σύντομα"
-          subtitle="Η υποστήριξη μέσα από την εφαρμογή ετοιμάζεται και θα ενεργοποιηθεί σε επόμενη ενημέρωση."
+          icon="phone-call"
+          label="Κάλεσε"
+          onPress={() => Linking.openURL(`tel:${SUPPORT_PHONE}`)}
         />
 
-        <InfoBox isDarkMode={isDarkMode} icon="phone">
-          Μέχρι τότε, για οτιδήποτε προκύψει στη βάρδια επικοινώνησε απευθείας με
-          το κέντρο ελέγχου.
-        </InfoBox>
+        <View style={{ marginTop: 16 }}>
+          <InfoBox isDarkMode={isDarkMode} icon="info">
+            Το νούμερο είναι προσωρινό.
+          </InfoBox>
+        </View>
       </ScrollView>
     </View>
   );
