@@ -745,14 +745,24 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       // ── Ανίχνευση ΝΕΑΣ ανάθεσης από τον διαχειριστή ──
       // Νέα παραγγελία στη λίστα μου που ΔΕΝ την πάτησα εγώ = μου την ανέθεσε ή
       // μου τη μετέθεσε ο διαχειριστής → δυνατός επαναλαμβανόμενος συναγερμός.
-      // Δύο δρόμοι να θεωρηθεί «νέα»:
-      //   • ήρθε ως push όσο ήμασταν κλειστοί (assignedByPushIds) — ισχύει ΚΑΙ στο
-      //     πρώτο fetch, γι' αυτό ελέγχεται έξω από το knownMyOrderIds guard·
-      //   • εμφανίστηκε στη λίστα ενώ η εφαρμογή ήταν ήδη ανοιχτή.
+      //
+      // Το `assignedByPushIds` μετράει ΜΟΝΟ στο πρώτο fetch (knownMyOrderIds ακόμα
+      // null, δηλαδή η εφαρμογή μόλις άνοιξε): τότε είναι ο ΜΟΝΟΣ τρόπος να ξέρουμε
+      // ότι μια παραγγελία ήρθε ως ανάθεση και όχι ότι απλώς υπήρχε ήδη.
+      // ΜΕΤΑ το πρώτο fetch βασιζόμαστε ΑΠΟΚΛΕΙΣΤΙΚΑ στη διαφορά με το
+      // knownMyOrderIds — ΟΧΙ στο assignedByPushIds. Ο λόγος: το realtime κανάλι
+      // βλέπει το UPDATE της βάσης σχεδόν ακαριαία και καλεί fetchOrders (η
+      // ανάθεση χτυπάει κανονικά, μπαίνει στο knownMyOrderIds)· το push για το
+      // ΙΔΙΟ order id φτάνει λίγο αργότερα (edge function + FCM έχουν καθυστέρηση)
+      // και ξανακαλεί fetchOrders. Αν το assignedByPushIds μετρούσε ΠΑΝΤΑ, αυτό το
+      // δεύτερο fetch θα ξαναέβλεπε την ΙΔΙΑ παραγγελία ως «νέα» και θα ξανάπαιζε
+      // τον συναγερμό ΠΑΝΩ σε αυτόν που ήδη έπαιζε (seekTo(0) στο ίδιο player) —
+      // ακουγόταν σαν να «σπάει»/ξεκινάει απότομα από την αρχή. Μόνο με ανοιχτή
+      // εφαρμογή τη στιγμή της ανάθεσης, γι' αυτό το πρόβλημα ήταν διακοπτόμενο.
       const fresh = mineMapped.filter((o) => {
         if (selfAcceptedIds.current.has(o.id)) return false;
-        if (assignedByPushIds.current.has(String(o.id))) return true;
-        return knownMyOrderIds.current !== null && !knownMyOrderIds.current.has(o.id);
+        if (knownMyOrderIds.current === null) return assignedByPushIds.current.has(String(o.id));
+        return !knownMyOrderIds.current.has(o.id);
       });
 
       // ΚΑΤΑΝΑΛΩΝΕΤΑΙ ΠΑΝΤΑ, ακόμα κι όταν δεν βρέθηκε τίποτα νέο: αν το
