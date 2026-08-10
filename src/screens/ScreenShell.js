@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Colors } from '../styles/globalStyles';
 
@@ -153,6 +153,55 @@ export function WeekSwitcher({ isDarkMode, label, onPrev, onNext, badge }) {
           <Feather name="chevron-right" size={24} color={theme.accent} />
         </TouchableOpacity>
       </View>
+    </View>
+  );
+}
+
+/** «25.432» — χιλιόμετρα κοντέρ με ελληνικό διαχωριστή χιλιάδων. */
+export function formatOdometer(km) {
+  if (km === null || km === undefined || Number.isNaN(Number(km))) return '—';
+  return Math.round(Number(km)).toLocaleString('el-GR');
+}
+
+/**
+ * Πεδίο ένδειξης χιλιομετρητή (10/08/2026). Κοινό component επειδή το
+ * χρησιμοποιούν ΔΥΟ οθόνες — έναρξη και λήξη βάρδιας — και ο διανομέας πρέπει να
+ * βλέπει ακριβώς το ίδιο πράγμα και στις δύο· διαφορετικό πληκτρολόγιο ή
+ * διαφορετική μορφή αριθμού θα τον έκανε να αμφιβάλλει για το τι γράφει.
+ *
+ * ΜΟΝΟ ΑΚΕΡΑΙΑ: το κοντέρ της μηχανής δείχνει ακέραια χιλιόμετρα. Ένα δεκαδικό
+ * σημείο εδώ θα ήταν πρόσκληση για λάθος πληκτρολόγηση, όχι για ακρίβεια.
+ */
+export function OdometerInput({ isDarkMode, value, onChangeText, autoFocus, onSubmitEditing }) {
+  const theme = Colors[isDarkMode ? 'dark' : 'light'];
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      marginHorizontal: 16,
+      backgroundColor: theme.inputBg,
+      borderWidth: 2, borderColor: theme.accent, borderRadius: 16,
+      paddingHorizontal: 16, paddingVertical: 6,
+    }}>
+      <Feather name="hash" size={20} color={theme.accent} />
+      <TextInput
+        value={value}
+        // Το φιλτράρισμα γίνεται ΕΔΩ και όχι στη φόρμα: σε μερικά Android
+        // πληκτρολόγια το «number-pad» εξακολουθεί να επιτρέπει κόμμα/παύλα.
+        onChangeText={(t) => onChangeText(t.replace(/[^0-9]/g, '').slice(0, 7))}
+        onSubmitEditing={onSubmitEditing}
+        keyboardType="number-pad"
+        autoFocus={autoFocus}
+        maxLength={7}
+        placeholder="0"
+        placeholderTextColor={theme.subtitle}
+        selectionColor={theme.accent}
+        style={{
+          flex: 1, color: theme.text,
+          fontSize: 30, fontWeight: '900', letterSpacing: 1.5,
+          paddingVertical: 10,
+        }}
+      />
+      <Text style={{ color: theme.subtitle, fontSize: 15, fontWeight: '800' }}>χλμ</Text>
     </View>
   );
 }

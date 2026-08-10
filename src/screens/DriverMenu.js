@@ -40,7 +40,7 @@ function initialsOf(name) {
 }
 
 export default function DriverMenu({
-  visible, onClose, onNavigate, onLogout,
+  visible, onClose, onNavigate, onLogout, onEndShift,
   isDarkMode, setIsDarkMode,
   driverName, isOnDuty, lastLocationUpdate, activeScreen, unreadAnnouncements,
 }) {
@@ -206,6 +206,24 @@ export default function DriverMenu({
                 trackColor={{ false: '#9CA3AF', true: theme.accent }}
                 thumbColor="#FFFFFF"
               />
+            </TouchableOpacity>
+
+            {/* ── Λήξη βάρδιας ───────────────────────────────────────────── */}
+            {/* ΚΑΤΩ ΑΠΟ ΤΗ ΓΡΑΜΜΗ, ΔΙΠΛΑ ΣΤΗΝ ΕΞΟΔΟ: δεν είναι «σελίδα» αλλά
+                ενέργεια που τερματίζει τη βάρδια — ανήκει εκεί που ανήκει και η
+                Έξοδος. Υπάρχει ξεχωριστά (10/08/2026) επειδή πολλοί διανομείς
+                σχολάνε χωρίς να αποσυνδεθούν ποτέ· χωρίς αυτό δεν θα δήλωναν
+                ποτέ την τελική ένδειξη του κοντέρ. */}
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={onEndShift}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 14,
+                marginHorizontal: 10, paddingVertical: 14, paddingHorizontal: 12, borderRadius: 12,
+              }}
+            >
+              <Feather name="flag" size={21} color={theme.accent} />
+              <Text style={{ color: theme.accent, fontSize: 15, fontWeight: '800' }}>Λήξη βάρδιας</Text>
             </TouchableOpacity>
 
             {/* ── Έξοδος ─────────────────────────────────────────────────── */}

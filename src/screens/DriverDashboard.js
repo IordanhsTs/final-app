@@ -18,6 +18,8 @@ import AnnouncementsScreen from './AnnouncementsScreen';
 import DriverBroadcastScreen from './DriverBroadcastScreen';
 import SupportScreen from './SupportScreen';
 import VehicleSelectScreen from './VehicleSelectScreen';
+import ShiftEndScreen from './ShiftEndScreen';
+import { formatOdometer } from './ScreenShell';
 
 const notificationSound = require('../../assets/notification.mp3');
 const alarmSound = require('../../assets/assignment.wav');
@@ -26,25 +28,22 @@ const messageSound = require('../../assets/message.wav');
 const emptyOrdersDark = require('../../assets/empty_orders_dark.png');
 const emptyOrdersLight = require('../../assets/empty_orders_light.png');
 
-// ── Πλαίσιο «σήμερα»: ολοκληρωμένες / χιλιόμετρα / ώρες βάρδιας ──────────────
+// ── Πλαίσιο «σήμερα»: ολοκληρωμένες / μέσος χρόνος / ώρες βάρδιας ────────────
 // Μετά από τόση σιωπή ο server κλείνει ΜΟΝΟΣ του τη βάρδια (c_shift_idle_s,
 // migration 0013). Το κρατάμε ίδιο εδώ ώστε ο μετρητής «Ενεργός» να μη συνεχίζει
 // να τρέχει στην οθόνη για μια βάρδια που η βάση θεωρεί ήδη τελειωμένη.
 const SHIFT_IDLE_MS = 30 * 60 * 1000;
 
 /**
- * Χιλιόμετρα και χρόνος βάρδιας ΜΕΣΑ στο σημερινό 24ωρο (τοπική ώρα — η συσκευή
- * του διανομέα είναι στην Ελλάδα, άρα ταυτίζεται με το Europe/Athens της αναφοράς).
+ * Χρόνος βάρδιας ΜΕΣΑ στο σημερινό 24ωρο (τοπική ώρα — η συσκευή του διανομέα
+ * είναι στην Ελλάδα, άρα ταυτίζεται με το Europe/Athens της αναφοράς).
  *
  * ΟΙ ΩΡΕΣ ΕΙΝΑΙ ΑΚΡΙΒΕΙΣ: κρατάμε την τομή κάθε βάρδιας με το [μεσάνυχτα, τώρα].
  *
- * ΤΑ ΧΙΛΙΟΜΕΤΡΑ ΣΕ ΒΑΡΔΙΑ ΠΟΥ ΠΕΡΝΑΕΙ ΤΑ ΜΕΣΑΝΥΧΤΑ ΜΟΙΡΑΖΟΝΤΑΙ ΚΑΤ' ΑΝΑΛΟΓΙΑ
- * ΧΡΟΝΟΥ, γιατί δεν γίνεται αλλιώς: ο χιλιομετρητής κρατά ΕΝΑ σωρευτικό νούμερο
- * ανά βάρδια (`driver_shifts.distance_m`) και δεν υπάρχει πουθενά ιστορικό
- * στιγμάτων για να κοπεί στα μεσάνυχτα. Όταν η βάρδια ξεκινά και τελειώνει την
- * ίδια μέρα — η συντριπτική πλειοψηφία — ο συντελεστής είναι 1, δηλαδή το νούμερο
- * είναι ακριβές. Η προσέγγιση αφορά ΜΟΝΟ αυτό το κουτάκι: η χρέωση καυσίμων
- * διαβάζει τη βάρδια ολόκληρη από το `driver_distance_report()` και δεν αγγίζεται.
+ * Τα χιλιόμετρα έφυγαν από εδώ στις 10/08/2026: δεν μετριούνται πια από GPS αλλά
+ * από το κοντέρ, δηλαδή υπάρχουν μόνο ΜΕΤΑ τη λήξη της βάρδιας — ένα κουτάκι που
+ * θα έδειχνε «0» όλη μέρα και θα γέμιζε στο τέλος δεν λέει τίποτα στον διανομέα.
+ * Στη θέση τους μπήκε ο μέσος χρόνος παράδοσης (αίτημα πελάτη).
  */
 export function todayShiftTotals(shifts, now) {
   const dayStart = new Date(now);
@@ -52,7 +51,6 @@ export function todayShiftTotals(shifts, now) {
   const t0 = dayStart.getTime();
   const tNow = now.getTime();
 
-  let meters = 0;
   let seconds = 0;
 
   (shifts || []).forEach((s) => {
@@ -67,21 +65,42 @@ export function todayShiftTotals(shifts, now) {
       ? new Date(s.ended_at).getTime()
       : (tNow - lastSeen <= SHIFT_IDLE_MS ? tNow : lastSeen);
 
-    const total = Math.max(end - start, 0);
     // Math.min(end, tNow): φράχτης για ρολόι server/συσκευής που πάει μπροστά.
     const overlap = Math.max(Math.min(end, tNow) - Math.max(start, t0), 0);
     if (overlap <= 0) return;
 
     seconds += overlap / 1000;
-    meters += (Number(s.distance_m) || 0) * (total > 0 ? overlap / total : 0);
   });
 
-  return { meters, seconds };
+  return { seconds };
 }
 
-/** «0,0 km» — όπως στο σχέδιο του πελάτη (η κάρτα παραγγελίας γράφει «χλμ»). */
-function formatShiftKm(meters) {
-  return `${(meters / 1000).toFixed(1).replace('.', ',')} km`;
+/**
+ * Μέσος χρόνος παράδοσης σε δευτερόλεπτα: από την ΑΠΟΔΟΧΗ ως την ΠΑΡΑΔΟΣΗ
+ * (ορισμός πελάτη 10/08/2026) — ο ίδιος που δείχνει και το κέντρο ελέγχου στη
+ * ζωντανή εικόνα, ώστε τα δύο νούμερα να μη διαφωνούν ποτέ.
+ *
+ * Επιστρέφει null όταν δεν υπάρχει καμία ολοκληρωμένη παράδοση σήμερα — το
+ * κουτάκι δείχνει «—» αντί για ψεύτικο μηδέν.
+ */
+export function averageDeliverySeconds(orders) {
+  const valid = (orders || []).filter((o) => o.accepted_at && o.completed_at);
+  if (!valid.length) return null;
+  const total = valid.reduce((acc, o) => {
+    // Math.max(0, …): το accepted_at γράφεται από το κινητό και το completed_at
+    // από το κινητό επίσης, αλλά μια ανάθεση από τον admin έρχεται με ώρα server
+    // — μια απόκλιση ρολογιού δεν επιτρέπεται να δώσει αρνητική διάρκεια.
+    return acc + Math.max(0, new Date(o.completed_at) - new Date(o.accepted_at));
+  }, 0);
+  return total / valid.length / 1000;
+}
+
+/** «18′» για κάτω από μία ώρα, «1:05» από εκεί και πάνω. «—» χωρίς παραδόσεις. */
+function formatAvgDelivery(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins}′`;
+  return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`;
 }
 
 /** «00:00» — ώρες:λεπτά στη βάρδια. Μεγαλώνει πέρα από τις 24 αν χρειαστεί. */
@@ -130,6 +149,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // προχωράει μόνο του σε κάθε χτύπο του ρολογιού παρακάτω, χωρίς νέο ερώτημα.
   const [todayShifts, setTodayShifts] = useState([]);
   const [todayCompleted, setTodayCompleted] = useState(0);
+  // null = καμία παράδοση σήμερα (το κουτάκι δείχνει «—», όχι «0′»).
+  const [todayAvgSeconds, setTodayAvgSeconds] = useState(null);
   // Ρολόι για τις αντίστροφες μετρήσεις (χτυπά ανά δευτερόλεπτο μόνο όταν χρειάζεται).
   const [now, setNow] = useState(new Date());
 
@@ -167,6 +188,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeScreen, setActiveScreen] = useState(null);
   const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+  // Λήξη βάρδιας με ένδειξη κοντέρ (10/08/2026). Ξεχωριστό από το `activeScreen`
+  // επειδή δεν είναι «σελίδα του μενού» αλλά ροή με δύο αφετηρίες και δύο
+  // καταλήξεις: 'menu' (σχολάει, μένει συνδεδεμένος) και 'logout' (και έξοδος).
+  const [endShiftMode, setEndShiftMode] = useState(null);
 
   // States για Custom Modal Επιβεβαίωσης (και για απλά ενημερωτικά μηνύματα — βλ. showAlert
   // παρακάτω· έτσι όλα τα μηνύματα προς τον χρήστη μοιράζονται το ίδιο styled modal αντί να
@@ -717,13 +742,16 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     try {
       // Η διεύθυνση του καταστήματος μπαίνει στην κάρτα, στη γραμμή της παράδοσης
       // («Κοντοπούλου 4 → διεύθυνση πελάτη»): ο διανομέας θέλει να ξέρει ΑΠΟ ΠΟΥ
-      // παραλαμβάνει, όχι μόνο το όνομα. Είναι ΚΑΘΑΡΑ ΓΙΑ ΤΑ ΜΑΤΙΑ — η πλοήγηση
-      // πάει πάντα στον πελάτη, οπότε οι συντεταγμένες του καταστήματος δεν
-      // χρειάζονται εδώ (βλ. openNavigation).
-      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address');
+      // παραλαμβάνει, όχι μόνο το όνομα.
+      //
+      // Οι ΣΥΝΤΕΤΑΓΜΕΝΕΣ του καταστήματος χρειάζονται πλέον και εδώ: πριν την
+      // παραλαβή η πλοήγηση πάει στο κατάστημα (αίτημα πελάτη 10/08/2026, βλ.
+      // navTarget στο renderOrderItem). Είναι οι ίδιες συντεταγμένες που ήδη
+      // χρησιμοποιούνται για την απόσταση/χρέωση — ένα σημείο αλήθειας.
+      const { data: storesList } = await supabase.from('stores').select('id, name, phone, address, latitude, longitude');
       const storesMap = {};
       if (storesList) storesList.forEach(s => {
-        storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address };
+        storesMap[s.id] = { name: s.name, phone: s.phone, address: s.address, latitude: s.latitude, longitude: s.longitude };
       });
 
       // ΠΑΛΙΟΤΕΡΕΣ ΠΡΩΤΑ (ascending): η παραγγελία που περιμένει περισσότερο πρέπει
@@ -738,6 +766,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         store_name: storesMap[order.store_id]?.name || 'Κεντρικό Κατάστημα',
         store_phone: storesMap[order.store_id]?.phone || null,
         store_address: storesMap[order.store_id]?.address || null,
+        store_latitude: storesMap[order.store_id]?.latitude ?? null,
+        store_longitude: storesMap[order.store_id]?.longitude ?? null,
       }));
 
       const mineMapped = withStore(mine);
@@ -804,8 +834,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   // Τα τρία νούμερα του πλαισίου «σήμερα». Δύο ερωτήματα παράλληλα, μία φορά το
-  // λεπτό — φτηνά και τα δύο (το πρώτο είναι HEAD request, κατεβάζει μόνο το
-  // πλήθος· το δεύτερο 4 στήλες από ελάχιστες γραμμές).
+  // λεπτό — φτηνά και τα δύο (λίγες δεκάδες γραμμές με 2-4 στήλες η καθεμία).
+  //
+  // Το πρώτο ερώτημα ήταν HEAD (μόνο πλήθος) μέχρι 10/08/2026· τώρα κατεβάζει
+  // δύο χρονοσφραγίδες ανά παραγγελία γιατί από αυτές βγαίνει ο μέσος χρόνος
+  // παράδοσης. Το πλήθος το δίνει το ίδιο αποτέλεσμα, χωρίς δεύτερο αίτημα.
   async function fetchTodayStats() {
     try {
       const dayStart = new Date();
@@ -813,7 +846,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
       const [completed, shifts] = await Promise.all([
         supabase.from('orders')
-          .select('id', { count: 'exact', head: true })
+          .select('accepted_at, completed_at')
           .eq('driver_id', currentUser.id)
           .eq('status', 'completed')
           .gte('completed_at', dayStart.toISOString()),
@@ -823,13 +856,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // άνετα: η βάρδια κλείνει μετά από 30' σιωπής, οπότε ούτε με προβληματικό
         // GPS δεν βγαίνουν τόσες σε μία μέρα.
         supabase.from('driver_shifts')
-          .select('started_at, ended_at, last_ping_at, distance_m')
+          .select('started_at, ended_at, last_ping_at')
           .eq('driver_id', currentUser.id)
           .order('started_at', { ascending: false })
           .limit(30),
       ]);
 
-      setTodayCompleted(completed.count || 0);
+      const done = completed.data || [];
+      setTodayCompleted(done.length);
+      setTodayAvgSeconds(averageDeliverySeconds(done));
       setTodayShifts(shifts.data || []);
     } catch (e) {
       console.log("Stats Error:", e);
@@ -922,6 +957,35 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     setConfirmModalVisible(true);
   }
 
+  // Η οθόνη λήξης τελείωσε (ή προσπεράστηκε). Δύο καταλήξεις:
+  //   • 'logout' → η έξοδος συνεχίζει από εκεί που την άφησε ο διανομέας
+  //   • 'menu'   → μένει μέσα, αλλά τον ρωτάμε αν θέλει και έξοδο· χωρίς αυτό η
+  //     εφαρμογή θα συνέχιζε να στέλνει στίγματα και το πρώτο από αυτά θα άνοιγε
+  //     αμέσως νέα (κενή) βάρδια, φέρνοντας ξανά την ερώτηση για μηχανάκι.
+  async function handleShiftEnded(km) {
+    const wasLogout = endShiftMode === 'logout';
+    setEndShiftMode(null);
+    if (wasLogout) {
+      await handleDriverLogout();
+      return;
+    }
+    fetchTodayStats();
+    const line = (km === null || km === undefined)
+      ? 'Η βάρδια σας έκλεισε.'
+      : `Η βάρδια σας έκλεισε με ${formatOdometer(km)} χλμ.`;
+    // ΜΙΚΡΗ ΚΑΘΥΣΤΕΡΗΣΗ: στο Android ένα Modal που ανοίγει την ώρα που κλείνει
+    // άλλο μπορεί να μην εμφανιστεί καθόλου (ίδιο μάθημα με το μενού).
+    setTimeout(() => {
+      setConfirmConfig({
+        title: 'Τέλος βάρδιας',
+        message: `${line}\n\nΘέλετε να αποσυνδεθείτε από την εφαρμογή;`,
+        confirmLabel: 'Έξοδος',
+        onConfirm: () => { setConfirmModalVisible(false); handleDriverLogout(); },
+      });
+      setConfirmModalVisible(true);
+    }, 240);
+  }
+
   async function handleDriverLogout() {
     // Καθάρισμα σε ΟΛΑ τα backends (όχι μόνο στο ενεργό) ώστε να σταματήσουν
     // οι ειδοποιήσεις παραγγελιών από οποιοδήποτε σύστημα.
@@ -950,8 +1014,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     setConfirmModalVisible(true);
   };
 
-  // Άνοιγμα πλοήγησης προς τη διεύθυνση της παραγγελίας — πάντα τον πελάτη,
-  // πριν και μετά την παραλαβή (βλ. navTarget στο renderOrderItem).
+  // Άνοιγμα πλοήγησης προς τον προορισμό του ΤΡΕΧΟΝΤΟΣ σκέλους της διαδρομής:
+  // κατάστημα πριν την παραλαβή, πελάτης μετά (βλ. navTarget στο renderOrderItem).
   //
   // ΣΥΝΤΕΤΑΓΜΕΝΕΣ ΠΡΩΤΑ (30/07/2026). Πριν, στέλναμε ΜΟΝΟ κείμενο και το Google
   // Maps το γεωκωδικοποιούσε από την αρχή — αγνοώντας το σημείο που είχε ήδη
@@ -961,11 +1025,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   //     καθόλου, γιατί ως ελεύθερο κείμενο δεν αντιστοιχούν σε διεύθυνση
   // Με συντεταγμένες η πλοήγηση δείχνει ΑΚΡΙΒΩΣ το σημείο της χρέωσης.
   // Το κείμενο μένει ως fallback για παλιές παραγγελίες χωρίς lat/lon.
-  const openNavigation = (destination, lat, lon) => {
+  const openNavigation = (destination, lat, lon, toStore = false) => {
     const hasCoords = typeof lat === 'number' && typeof lon === 'number';
     setConfirmConfig({
       title: 'Πλοήγηση',
-      message: `Έναρξη πλοήγησης προς τον πελάτη:\n${destination}`,
+      message: `Έναρξη πλοήγησης προς ${toStore ? 'το κατάστημα' : 'τον πελάτη'}:\n${destination}`,
       confirmLabel: 'Πλοήγηση',
       onConfirm: () => {
         setConfirmModalVisible(false);
@@ -1002,19 +1066,27 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
     const pickedUp = !!item.picked_up_at;
 
-    // Η ΠΛΟΗΓΗΣΗ ΠΑΕΙ ΠΑΝΤΑ ΣΤΟΝ ΠΕΛΑΤΗ (απόφαση πελάτη 08/08/2026).
+    // Η ΠΛΟΗΓΗΣΗ ΑΚΟΛΟΥΘΕΙ ΤΟ ΣΚΕΛΟΣ ΤΗΣ ΔΙΑΔΡΟΜΗΣ (αίτημα πελάτη 10/08/2026):
+    // πριν την παραλαβή → κατάστημα, μετά την παραλαβή → πελάτης. Δηλαδή το
+    // κουμπί δείχνει πάντα «πού πάω ΤΩΡΑ», χωρίς ο διανομέας να το σκέφτεται.
     //
-    // Παλιά ήταν `!pickedUp && !!store_address ? κατάστημα : πελάτης`, δηλαδή
-    // πριν την παραλαβή πλοηγούσε στο μαγαζί. Στην πράξη δεν ενεργοποιήθηκε
-    // ποτέ, γιατί το `stores.address` ήταν κενό σε ΟΛΑ τα καταστήματα — και
-    // μόλις αρχίσουμε να το συμπληρώνουμε (για να φαίνεται στην κάρτα) η
-    // πλοήγηση θα άλλαζε προορισμό από μόνη της, χωρίς να το ζητήσει κανείς.
-    // Ο διανομέας ξέρει πού είναι τα μαγαζιά· αυτό που θέλει από το κουμπί
-    // είναι η διεύθυνση της παραγγελίας. Άρα ο προορισμός ΔΕΝ εξαρτάται πια
-    // από το αν έχει καταχωρηθεί διεύθυνση καταστήματος.
-    const navTarget = item.address;
-    const navLat = item.latitude;
-    const navLon = item.longitude;
+    // Στις 08/08/2026 είχε γίνει το αντίθετο (πάντα ο πελάτης) — αλλά τότε
+    // κριτήριο ήταν το `store_address`, που ήταν κενό παντού και θα «ξυπνούσε»
+    // μόνο του μόλις γέμιζαν οι διευθύνσεις. Τώρα το ζητάει ρητά ο πελάτης και
+    // κριτήριο είναι οι ΣΥΝΤΕΤΑΓΜΕΝΕΣ του καταστήματος — οι ίδιες που ήδη
+    // χρησιμοποιούνται για την απόσταση/χρέωση, άρα υπάρχουν σε κάθε κατάστημα
+    // που στέλνει παραγγελίες.
+    //
+    // Το `hasStorePos` είναι δίχτυ ασφαλείας: αν λείπουν και συντεταγμένες και
+    // διεύθυνση καταστήματος, η πλοήγηση πέφτει πίσω στον πελάτη αντί να ανοίξει
+    // χάρτη με κενό προορισμό.
+    const hasStorePos = (typeof item.store_latitude === 'number' && typeof item.store_longitude === 'number')
+      || !!item.store_address;
+    const navToStore = !pickedUp && hasStorePos;
+
+    const navTarget = navToStore ? (item.store_address || item.store_name) : item.address;
+    const navLat = navToStore ? item.store_latitude : item.latitude;
+    const navLon = navToStore ? item.store_longitude : item.longitude;
 
     // Χρώματα χρόνου: Πράσινο μέχρι 9 λεπτά, Κόκκινο από 10 και πάνω. Ολοκληρωμένες πάντα πράσινες.
     // Πλέον ΔΕΝ εξαρτώνται από το θέμα — η κάρτα είναι άσπρη και στα δύο.
@@ -1066,7 +1138,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {!isScheduled && (
               <TouchableOpacity
-                onPress={() => openNavigation(navTarget, navLat, navLon)}
+                onPress={() => openNavigation(navTarget, navLat, navLon, navToStore)}
                 style={roundBtn}
                 accessibilityLabel="Πλοήγηση"
               >
@@ -1335,7 +1407,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // Παράγωγα του ρολογιού `now`, όχι state: το «Ενεργός» ανεβαίνει έτσι μόνο του
   // κάθε λεπτό (η FlatList ξαναζωγραφίζει ήδη μέσω του extraData) χωρίς να
   // ξαναρωτήσουμε τη βάση, και μηδενίζει μόλις το `now` περάσει τα μεσάνυχτα.
-  const { meters: todayMeters, seconds: todaySeconds } = todayShiftTotals(todayShifts, now);
+  const { seconds: todaySeconds } = todayShiftTotals(todayShifts, now);
 
   // ── Πλαίσιο «σήμερα»: το κλείσιμο της λίστας (σχέδιο πελάτη 02/08/2026) ────
   // ΚΥΛΑΕΙ ΜΑΖΙ ΜΕ ΤΗ ΛΙΣΤΑ και δεν είναι σταθερή μπάρα: μια μόνιμη μπάρα θα
@@ -1363,7 +1435,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       { key: 'orders', icon: <Feather name="clipboard" size={17} color={theme.accent} />, label: 'Σύνολο σήμερα', value: String(todayCompleted) },
       // Και τα τρία εικονίδια από Feather: σε τρία κολλητά κουτάκια, δύο
       // διαφορετικά πάχη γραμμής (Feather 24άρι vs Ionicons 512άρι) φαίνονται.
-      { key: 'km', icon: <Feather name="map" size={17} color={theme.accent} />, label: 'Χιλιόμετρα', value: formatShiftKm(todayMeters) },
+      //
+      // Στη θέση των χιλιομέτρων από 10/08/2026 (αίτημα πελάτη): τα χιλιόμετρα
+      // βγαίνουν πλέον από το κοντέρ στο τέλος της βάρδιας, άρα δεν υπάρχει
+      // ζωντανό νούμερο να δείξουμε εδώ.
+      { key: 'avg', icon: <Feather name="trending-up" size={17} color={theme.accent} />, label: 'Μέσος χρόνος', value: formatAvgDelivery(todayAvgSeconds) },
       { key: 'time', icon: <Feather name="clock" size={17} color={theme.accent} />, label: 'Ενεργός', value: formatShiftClock(todaySeconds) },
     ];
 
@@ -1499,7 +1575,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         lastLocationUpdate={lastLocationUpdate}
         activeScreen={activeScreen}
         unreadAnnouncements={unreadAnnouncements}
-        onLogout={() => { setMenuVisible(false); handleDriverLogout(); }}
+        // Η ΕΞΟΔΟΣ ΕΙΝΑΙ ΛΗΞΗ ΒΑΡΔΙΑΣ (αίτημα πελάτη 10/08/2026): περνά πρώτα από
+        // τη φόρμα κοντέρ και μετά αποσυνδέει. Η φόρμα έχει δική της διέξοδο αν
+        // δεν υπάρχει δίκτυο, ώστε η έξοδος να μη μπλοκάρει ποτέ.
+        onLogout={() => { setMenuVisible(false); setTimeout(() => setEndShiftMode('logout'), 240); }}
+        onEndShift={() => { setMenuVisible(false); setTimeout(() => setEndShiftMode('menu'), 240); }}
         onNavigate={(key) => {
           setMenuVisible(false);
           // «Αρχική» δεν ανοίγει οθόνη — κλείνει ό,τι είναι ανοιχτό και αφήνει
@@ -1556,6 +1636,25 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             driverName={currentUser.full_name}
             onBack={() => setActiveScreen(null)}
             onDone={() => setActiveScreen(null)}
+          />
+        ) : null}
+      </Modal>
+
+      {/* ── Λήξη βάρδιας με ένδειξη κοντέρ (10/08/2026) ───────────────────────
+          Ξεχωριστό Modal από τις οθόνες του μενού: ξεκινά ΚΑΙ από την «Έξοδο»,
+          που δεν περνά καθόλου από το `activeScreen`. */}
+      <Modal
+        visible={endShiftMode !== null}
+        animationType="slide"
+        onRequestClose={() => setEndShiftMode(null)}
+      >
+        {endShiftMode !== null ? (
+          <ShiftEndScreen
+            isDarkMode={isDarkMode}
+            driverName={currentUser.full_name}
+            mode={endShiftMode}
+            onBack={() => setEndShiftMode(null)}
+            onEnded={handleShiftEnded}
           />
         ) : null}
       </Modal>
