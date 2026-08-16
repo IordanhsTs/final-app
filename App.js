@@ -279,8 +279,6 @@ export default function App() {
       .channel(`driver_status_${currentUser.id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` }, async (payload) => {
         if (payload.new && (payload.new.is_active === false || payload.new.is_blocked === true)) {
-          const msg = payload.new.is_blocked ? "Ο λογαριασμός σας έχει μπλοκαριστεί." : "Η βάρδια σας τερματίστηκε από το κέντρο ελέγχου.";
-          Alert.alert("Αποσύνδεση", msg);
           await clearDriverPresenceEverywhere(currentUser.id);
           supabase.removeAllChannels();
           await endSession({ global: true });
