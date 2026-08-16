@@ -208,7 +208,6 @@ export default function App() {
       // ανανέωση του token. Τελευταία ελπίδα πριν πετάξουμε τον διανομέα έξω.
       if (await recoverSessionFromNative()) return;
 
-      Alert.alert('Η σύνδεση διακόπηκε', 'Παρακαλώ συνδεθείτε ξανά.');
       setCurrentUser(null);
     });
 
