@@ -211,6 +211,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // εφαρμογή, FCM push για κλειδωμένη οθόνη). Κρατάμε ποιες έχουμε ήδη δει ώστε
   // να μη δείξουμε — και κυρίως να μην ηχήσουμε — την ίδια δύο φορές.
   const seenBroadcastIds = useRef(new Set());
+  // ── ΔΙΑΓΡΑΦΗ ΠΑΡΑΓΓΕΛΙΑΣ ΑΠΟ ΤΟ ΚΕΝΤΡΟ (αίτημα πελάτη 17/08/2026) ───────────
+  // Το push kind 'cancel' έφτανε ήδη ως ήχος + banner του λειτουργικού (βλ.
+  // send-assignment-notification), αλλά χωρίς ίχνος ΜΕΣΑ στην εφαρμογή — αν ο
+  // διανομέας οδηγεί με κλειδωμένο κινητό, το χάνει. Ίδιο ΟΥΡΑ pattern με τις
+  // ανακοινώσεις συναδέλφων· δεν πειράζει καθόλου τον υπάρχοντα ήχο/banner.
+  const [cancelledOrderAlerts, setCancelledOrderAlerts] = useState([]);
+  const seenCancelIds = useRef(new Set());
   // Το κανάλι μέσω του οποίου ΣΤΕΛΝΕΙ ο διανομέας. Το Realtime απαιτεί να είσαι
   // subscribed για να κάνεις broadcast, οπότε στέλνουμε από το ίδιο κανάλι που
   // ήδη ακούει παρακάτω — δεύτερο κανάλι με το ίδιο topic θα ήταν διπλή σύνδεση.
@@ -325,6 +332,26 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       }, alreadySounded);
     };
 
+    // Διαγραφή/ακύρωση παραγγελίας από τον διαχειριστή (kind 'cancel'). Ο ήχος
+    // και το banner τα αναλαμβάνει ήδη το λειτουργικό/expo-notifications — εδώ
+    // προσθέτουμε ΜΟΝΟ το ενημερωτικό παράθυρο, με το ίδιο κείμενο του push.
+    const readCancelledOrderPush = (notification) => {
+      const data = notification?.request?.content?.data;
+      if (!data || data.kind !== 'cancel' || !data.orderId) return;
+
+      const id = String(data.orderId);
+      if (seenCancelIds.current.has(id)) return;
+      seenCancelIds.current.add(id);
+      if (seenCancelIds.current.size > 50) {
+        seenCancelIds.current.delete(seenCancelIds.current.values().next().value);
+      }
+
+      setCancelledOrderAlerts((queue) => [...queue, {
+        id,
+        message: notification?.request?.content?.body || 'Η διαχείριση διέγραψε μια παραγγελία σου.',
+      }]);
+    };
+
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
       // Ο listener χτυπά και σε background (η εφαρμογή ζει ακόμα). ΤΟΤΕ όμως το
@@ -332,6 +359,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       // δεν εξαρτάται από ανάγνωση της μπάρας ειδοποιήσεων ούτε από το OEM.
       rememberAssignmentPush(notification, AppState.currentState !== 'active');
       readDriverBroadcastPush(notification, AppState.currentState !== 'active');
+      readCancelledOrderPush(notification);
       fetchOrders();
     });
 
@@ -339,6 +367,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       // Tap στην ειδοποίηση ⇒ ήταν ορατή ⇒ το κανάλι ΕΠΑΙΞΕ τον ήχο.
       rememberAssignmentPush(response?.notification, true);
       readDriverBroadcastPush(response?.notification, true);
+      readCancelledOrderPush(response?.notification);
       fetchOrders();
     });
 
@@ -1807,6 +1836,49 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             <TouchableOpacity
               style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
               onPress={() => setDriverBroadcasts((queue) => queue.slice(1))}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── ΔΙΑΓΡΑΦΗ ΠΑΡΑΓΓΕΛΙΑΣ ΑΠΟ ΤΟ ΚΕΝΤΡΟ ───
+          Ο ήχος και το banner τα έχει ήδη δώσει το push· εδώ μόνο το ίχνος μέσα
+          στην εφαρμογή, ίδιο ΟΥΡΑ pattern με την ανακοίνωση συναδέλφου. */}
+      <Modal visible={cancelledOrderAlerts.length > 0} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 400,
+            backgroundColor: theme.surface,
+            borderRadius: 24,
+            padding: 24,
+            borderTopWidth: 4,
+            borderTopColor: '#EF4444',
+            elevation: 10,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 16 }}>
+              <Feather name="trash-2" size={20} color="#EF4444" />
+              <Text style={{ fontSize: 19, fontWeight: 'bold', color: isDarkMode ? '#F0EBE2' : '#1E1A14', flex: 1 }}>
+                Διαγραφή παραγγελίας
+              </Text>
+              {cancelledOrderAlerts.length > 1 ? (
+                <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: 'rgba(239,68,68,0.18)' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '900', color: '#EF4444' }}>+{cancelledOrderAlerts.length - 1}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
+              <Text style={{ fontSize: 16, lineHeight: 24, color: isDarkMode ? '#F0EBE2' : '#1E1A14' }}>
+                {cancelledOrderAlerts[0]?.message}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+              onPress={() => setCancelledOrderAlerts((queue) => queue.slice(1))}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
             </TouchableOpacity>
