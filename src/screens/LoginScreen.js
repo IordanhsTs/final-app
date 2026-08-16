@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View, Alert, Platform, StyleSheet, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase, hardSignOut } from '../../supabase';
+import { decodeJwtClaims } from '../services/sessionStore';
 import { Colors } from '../styles/globalStyles';
 
 export default function LoginScreen({ setCurrentUser, isDarkMode }) {
@@ -35,7 +36,18 @@ export default function LoginScreen({ setCurrentUser, isDarkMode }) {
 
     // 2. Ανάκτηση δεδομένων προφίλ διανομέα από τη βάση
     // Αρχιτεκτονική Single Source of Truth: Ταύτιση αποκλειστικά με το Auth UUID
-    const { data, error } = await supabase.from('drivers').select('*').eq('id', authData.user.id).single();
+    //
+    // ΣΧΗΜΑ ΑΠΕΥΘΕΙΑΣ ΑΠΟ ΤΟ JWT, ΟΧΙ ΑΠΟ ΤΟΝ ΚΟΙΝΟ CLIENT: το supabase.js
+    // ξαναχτίζει τον client στο σωστό tenant schema μέσω δικού του
+    // onAuthStateChange listener, αλλά αυτό τρέχει ασύγχρονα (περιλαμβάνει ένα
+    // πραγματικό await στο AsyncStorage) — αν προλάβουμε εμείς πρώτοι, θα
+    // ρωτούσαμε ακόμη το παλιό (π.χ. 'public') schema και δεν θα βρίσκαμε τον
+    // διανομέα στην πρώτη ποτέ σύνδεση μιας συσκευής. Διαβάζοντας το tenant
+    // claim απευθείας από το φρέσκο session, το ερώτημα πάει σωστά με μία.
+    const tenant = decodeJwtClaims(authData.session?.access_token)?.tenant;
+    const driversTable = () => (tenant ? supabase.schema(tenant).from('drivers') : supabase.from('drivers'));
+
+    const { data, error } = await driversTable().select('*').eq('id', authData.user.id).single();
 
     if (data && !error) {
       if (data.is_blocked === true) {
@@ -44,7 +56,7 @@ export default function LoginScreen({ setCurrentUser, isDarkMode }) {
         setLoading(false);
         return;
       }
-      await supabase.from('drivers').update({ is_active: true }).eq('id', data.id);
+      await driversTable().update({ is_active: true }).eq('id', data.id);
       setCurrentUser(data);
     } else {
       console.log('Profile Fetch Error:', error);
