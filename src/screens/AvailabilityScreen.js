@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Switch, ActivityIndicator } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Feather } from '@expo/vector-icons';
-import { supabase, isReadOnly } from '../../supabase';
+import { supabase } from '../../supabase';
 import { Colors } from '../styles/globalStyles';
 import {
   ScreenHeader, ScreenTitle, InfoBox, WeekSwitcher, PrimaryButton,
@@ -195,11 +195,6 @@ export default function AvailabilityScreen({ currentUser, isDarkMode, onBack }) 
 
   // ── Αποστολή ──────────────────────────────────────────────────────────────
   async function submit() {
-    if (isReadOnly()) {
-      setFeedback({ ok: false, text: 'Εφεδρική λειτουργία — δοκίμασε ξανά σε λίγο.' });
-      return;
-    }
-
     const slots = daysToSlots(days);
 
     // Μηδενικό διάστημα: το απορρίπτει και η βάση (constraint), αλλά ένα

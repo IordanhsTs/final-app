@@ -278,10 +278,14 @@ export function getTenantSchema() {
   return tenantSchema || 'public';
 }
 
-// READ-ONLY-ON-FAILOVER: όταν τρέχουμε στο εφεδρικό (standby), οι εγγραφές είναι
-// κλειστές — το standby δέχεται ΜΟΝΟ αναγνώσεις κατά τη βλάβη ώστε να μην αποκλίνουν
-// τα δεδομένα. Τιμή call-time (το switchTo αλλάζει το activeIndex χωρίς reload).
-export function isReadOnly() {
+// Τρέχουμε στο εφεδρικό backend; Χρησιμεύει ΜΟΝΟ για ενημερωτική ένδειξη.
+//
+// ΤΙ ΑΛΛΑΞΕ (27/08/2026): παλιότερα λεγόταν isReadOnly() και κλείδωνε αποδοχή,
+// παραλαβή και παράδοση παραγγελίας σε failover — δηλαδή ο διανομέας δεν μπορούσε
+// να δουλέψει ακριβώς τη στιγμή που το σύστημα είχε πρόβλημα. Πλέον το standby
+// δέχεται τα πάντα και η επαναφορά των δεδομένων γίνεται αυτόματα στις 02:00.
+// Τιμή call-time (το switchTo αλλάζει το activeIndex χωρίς reload).
+export function isBackupMode() {
   return BACKENDS[activeIndex]?.name === 'standby';
 }
 

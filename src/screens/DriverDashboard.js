@@ -5,7 +5,7 @@ import { formatKm, formatCountdown, orderDurations, minutesSinceCreated } from '
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isReadOnly, onBackendChange, hardSignOut } from '../../supabase';
+import { supabase, clearDriverPresenceEverywhere, getTenantSchema, isBackupMode, onBackendChange, hardSignOut } from '../../supabase';
 import { getStyles, Colors, CardColors } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -230,11 +230,11 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [locationOk, setLocationOk] = useState(false);
   const lastLocationUpdateAt = useRef(0);
 
-  // READ-ONLY-ON-FAILOVER: μπάρα + κλείδωμα ενεργειών όταν τρέχουμε στο εφεδρικό
-  // (standby). Ενημερώνεται σε κάθε αλλαγή backend (το switchTo δεν κάνει reload).
-  const [readOnly, setReadOnly] = useState(isReadOnly());
+  // Ενημερωτική μπάρα όταν τρέχουμε στο εφεδρικό (standby) — ΧΩΡΙΣ κλείδωμα
+  // ενεργειών. Ενημερώνεται σε κάθε αλλαγή backend (το switchTo δεν κάνει reload).
+  const [backupMode, setBackupMode] = useState(isBackupMode());
   useEffect(() => {
-    const off = onBackendChange(() => setReadOnly(isReadOnly()));
+    const off = onBackendChange(() => setBackupMode(isBackupMode()));
     return off;
   }, []);
 
@@ -914,10 +914,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   async function acceptOrder(orderId) {
-    if (isReadOnly()) {
-      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
-      return;
-    }
     setConfirmConfig({
       title: "Αποδοχή Παραγγελίας",
       message: "Είστε σίγουρος πως θέλετε να κάνετε αποδοχή;",
@@ -949,10 +945,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // ΠΑΡΑΛΑΒΗ: το ενδιάμεσο στάδιο. Ο διανομέας φτάνει στο κατάστημα, φορτώνει και
   // το δηλώνει — μετά το ίδιο κουμπί γίνεται «ΠΑΡΑΔΟΣΗ».
   async function pickUpOrder(orderId) {
-    if (isReadOnly()) {
-      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
-      return;
-    }
     setConfirmConfig({
       title: "Παραλαβή Παραγγελίας",
       message: "Επιβεβαιώνετε ότι παραλάβατε την παραγγελία από το κατάστημα;",
@@ -967,10 +959,6 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   async function completeOrder(orderId) {
-    if (isReadOnly()) {
-      showAlert('Εφεδρική λειτουργία', 'Το σύστημα τρέχει προσωρινά σε εφεδρική λειτουργία (μόνο ανάγνωση). Δοκιμάστε ξανά μόλις αποκατασταθεί το κύριο σύστημα.');
-      return;
-    }
     setConfirmConfig({
       title: "Ολοκλήρωση Παραγγελίας",
       message: "Είστε σίγουρος πως η παραγγελία παραδόθηκε;",
@@ -1227,7 +1215,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             εμφανίζεται καθόλου η πρώτη γραμμή. */}
         {item.store_address ? (
           <Text style={{ fontSize: 12, fontWeight: '700', color: CardColors.muted, marginBottom: 2 }}>
-            <Feather name="map-pin" size={11} color={CardColors.muted} />{' '}
+            {/* Διαφορετικό εικονίδιο από της παράδοσης (αίτημα πελάτη 13/08/2026):
+                δύο ίδιες πινέζες η μία κάτω από την άλλη μπέρδευαν οπτικά — αυτή
+                είναι η παραλαβή (κατάστημα), όχι προορισμός με GPS. */}
+            <Feather name="shopping-bag" size={11} color={CardColors.muted} />{' '}
             {item.store_address}
           </Text>
         ) : null}
@@ -1545,12 +1536,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         </View>
       </View>
 
-      {/* READ-ONLY-ON-FAILOVER: μπάρα όταν τρέχουμε στο εφεδρικό (standby) */}
-      {readOnly && (
+      {/* Ενημερωτική μπάρα όταν τρέχουμε στο εφεδρικό (standby) */}
+      {backupMode && (
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 12, backgroundColor: isDarkMode ? 'rgba(251,191,36,0.12)' : '#FFFBEB', borderBottomWidth: 1, borderBottomColor: isDarkMode ? 'rgba(251,191,36,0.25)' : '#FDE68A' }}>
           <Feather name="alert-triangle" size={14} color={isDarkMode ? '#FBBF24' : '#B45309'} style={{ marginRight: 6 }} />
           <Text style={{ color: isDarkMode ? '#FBBF24' : '#B45309', fontSize: 12, fontWeight: '700', textAlign: 'center', flexShrink: 1 }}>
-            Εφεδρική λειτουργία — προσωρινά μόνο ανάγνωση
+            Εφεδρικό σύστημα — όλα δουλεύουν κανονικά
           </Text>
         </View>
       )}
