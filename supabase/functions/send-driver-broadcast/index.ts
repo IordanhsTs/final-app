@@ -42,12 +42,6 @@ const MESSAGE_CHANNEL = 'messages_urgent_v1'
 // από εκεί.
 const MAX_LEN = 200
 
-// Πόσο «φρέσκος» πρέπει να είναι ο διανομέας για να θεωρείται σε βάρδια. Το
-// native GPS service γράφει κάθε 10", άρα 3 λεπτά είναι άφθονο περιθώριο. Ίδιο
-// κριτήριο με τη send-order-notification: όποιος σταμάτησε να στέλνει στίγμα
-// εξαιρείται ΑΥΤΟΜΑΤΑ, χωρίς να εξαρτόμαστε από καθάρισμα του is_active.
-const FRESH_MS = 3 * 60 * 1000
-
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } })
 
@@ -105,15 +99,15 @@ serve(async (req) => {
     const broadcastId = String(body?.broadcastId ?? `${sender.id}-${Date.now()}`)
     const sentAt = String(body?.sentAt ?? new Date().toISOString())
 
-    // ── Οι παραλήπτες: όλοι οι ΑΛΛΟΙ διανομείς σε βάρδια ─────────────────────
-    const freshSince = new Date(Date.now() - FRESH_MS).toISOString()
+    // ── Οι παραλήπτες: όλοι οι ΑΛΛΟΙ συνδεδεμένοι διανομείς ──────────────────
+    // ΣΚΟΠΙΜΑ ΧΩΡΙΣ φίλτρο last_seen — βλ. send-order-notification για το γιατί
+    // (το last_seen εξαρτάται από GPS fix, όχι από το αν υπάρχει internet).
     const { data: recipients } = await db
       .from('drivers')
       .select('fcm_token')
       .not('fcm_token', 'is', null)
       .eq('is_active', true)
       .eq('is_blocked', false)
-      .gt('last_seen', freshSince)
       .neq('id', sender.id)
 
     const tokens = [...new Set((recipients || []).map((d) => d.fcm_token).filter(Boolean))]

@@ -40,16 +40,15 @@ serve(async (req) => {
 
     // Βρίσκουμε τους διαθέσιμους οδηγούς ΤΗΣ ΕΤΑΙΡΙΑΣ που έχουν fcm_token.
     //
-    // HEARTBEAT GATE (last_seen): ειδοποιούμε ΜΟΝΟ οδηγούς που ενημέρωσαν θέση
-    // πρόσφατα — δηλαδή είναι όντως ΣΕ ΒΑΡΔΙΑ. Το native GPS service γράφει κάθε
-    // 10s, άρα ένα ενεργό κινητό έχει πάντα φρέσκο last_seen. Ένα κλειστό/
-    // αποσυνδεδεμένο κινητό (π.χ. έληξε το session και δεν καθαρίστηκε το
-    // is_active/fcm_token) σταματά να ενημερώνει → εξαιρείται ΑΥΤΟΜΑΤΑ εδώ, ώστε
-    // να ΜΗΝ έρχονται ειδοποιήσεις εκτός βάρδιας. Self-healing: δεν εξαρτάται από
-    // το αν πρόλαβε ο client να καθαρίσει την παρουσία του.
-    const FRESH_MS = 3 * 60 * 1000 // 3 λεπτά (native interval = 10s → άφθονο περιθώριο)
-    const freshSince = new Date(Date.now() - FRESH_MS).toISOString()
-
+    // ΣΚΟΠΙΜΑ ΧΩΡΙΣ φίλτρο πάνω στο last_seen. Παλιότερα υπήρχε "heartbeat gate"
+    // (last_seen φρέσκο < 3 λεπτά) για να αποκλείει διανομείς εκτός βάρδιας· το
+    // πρόβλημα είναι ότι το last_seen ενημερώνεται ΜΟΝΟ όταν το native GPS
+    // service πάρει location fix (VertexLocationService.kt). Σε περιοχή χωρίς
+    // σήμα GPS ο διανομέας έχει συχνά κανονικό internet (data/wifi) και θα
+    // μπορούσε να λάβει το FCM push κανονικά, αλλά έμενε ΣΙΩΠΗΛΑ εκτός ΚΑΘΕ
+    // ειδοποίησης παραγγελίας μέχρι να ξαναπιάσει σήμα — ρητά ανεπιθύμητο.
+    // Η επιλεξιμότητα βασίζεται μόνο σε is_active/is_blocked, ίδιο κριτήριο με
+    // τη send-assignment-notification/send-message-notification.
     const { data: drivers, error: driverError } = await supabase
       .schema(schema)
       .from('drivers')
@@ -57,7 +56,6 @@ serve(async (req) => {
       .not('fcm_token', 'is', null)
       .eq('is_active', true)
       .eq('is_blocked', false)
-      .gt('last_seen', freshSince)
 
     if (driverError || !drivers || drivers.length === 0) {
       console.log("No drivers with FCM tokens found.")
