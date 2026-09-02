@@ -1260,10 +1260,21 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             style={[styles.premiumButtonWrapper, { shadowColor: pickedUp ? '#10B981' : '#208AEF' }]}
             onPress={() => (pickedUp ? completeOrder(item.id) : pickUpOrder(item.id))}
           >
-            <View style={[styles.premiumButtonBackground, { backgroundColor: pickedUp ? '#10B981' : '#208AEF' }]}>
+            <View style={[styles.premiumButtonBackground, { backgroundColor: pickedUp ? '#10B981' : '#208AEF', flexDirection: 'row', gap: 10 }]}>
               <Text style={[styles.premiumButtonText, { color: '#FFF' }]}>
                 {pickedUp ? 'ΠΑΡΑΔΟΣΗ' : 'ΠΑΡΑΛΑΒΗ'}
               </Text>
+              {/* ΠΟΣΗ ΩΡΑ ΤΗΝ ΚΡΑΤΑΕΙ (αίτημα διανομέων 02/09/2026): ο χρόνος πάνω
+                  δεξιά είναι ο ΣΥΝΟΛΙΚΟΣ — δεν λέει αν την πήρε μόλις τώρα ή αν την
+                  κρατά 20 λεπτά. Μπαίνει ΕΔΩ και όχι δίπλα στον συνολικό: η πάνω
+                  γραμμή είναι ήδη γεμάτη (αριθμός, όνομα, τηλέφωνο, πλοήγηση, χρόνος)
+                  και ένα δεύτερο κουτάκι εκεί άφηνε 37dp στο όνομα του καταστήματος
+                  σε οθόνη 360dp — τρία γράμματα. Στα 320dp το εξαφάνιζε τελείως.
+                  Σε λεπτά, ΟΧΙ δευτερόλεπτα: το ρολόι της λίστας χτυπά ανά λεπτό και
+                  τα δευτερόλεπτα θα το ανάγκαζαν να χτυπά 60 φορές πιο συχνά. */}
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.22)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+                <Text style={{ color: '#FFF', fontSize: 13, fontWeight: '900' }}>{acceptedMins} λ.</Text>
+              </View>
             </View>
           </TouchableOpacity>
         )}
