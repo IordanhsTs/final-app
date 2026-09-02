@@ -441,11 +441,15 @@ export default function App() {
 
       // Συνάρτηση για εκκίνηση του service
       const startService = async () => {
+        // WARM-UP του GPS: Ζητάμε μία ακριβή τοποθεσία για να "ξυπνήσει" το τσιπ του GPS.
+        // Το getCurrentPositionAsync δεν έχει timeout δικό του — σε ψυχρή εκκίνηση/κακό
+        // σήμα μπορεί να κρεμάσει επ' αόριστον. Βάζουμε δικό μας timeout ώστε ένα αργό
+        // warm-up να ΜΗΝ εμποδίζει ποτέ το πραγματικό background service να ξεκινήσει.
         try {
-          // WARM-UP του GPS: Ζητάμε αμέσως μία ακριβή τοποθεσία για να "ξυπνήσει" το τσιπ του GPS
-          const initialLocation = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.BestForNavigation,
-          });
+          const initialLocation = await Promise.race([
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('GPS warm-up timeout')), 8000)),
+          ]);
           console.log("📍 WARM-UP GPS Location:", initialLocation.coords);
 
           // Στέλνουμε αμέσως την πρώτη σωστή τοποθεσία στη βάση
@@ -456,13 +460,15 @@ export default function App() {
               longitude: initialLocation.coords.longitude,
             })
             .eq('id', currentUser.id);
+        } catch (e) {
+          console.log('⚠️ GPS warm-up απέτυχε/άργησε, προχωράμε στο background service:', String(e));
+        }
 
-          // --- NATIVE FOREGROUND SERVICE (WakeLock + FusedLocation, bypass JS bridge) ---
+        // --- NATIVE FOREGROUND SERVICE (WakeLock + FusedLocation, bypass JS bridge) ---
+        // Ξεκινάει ΠΑΝΤΑ, ανεξάρτητα από το αν πέτυχε το warm-up παραπάνω.
+        try {
           await ensureBatteryExemption();   // δείχνει το system dialog την 1η φορά
           await startNativeTracking(currentUser.id);
-
-
-
         } catch (e) {
           Alert.alert('Σφάλμα Background Service', String(e));
           console.error('Σφάλμα εκκίνησης background location:', e);

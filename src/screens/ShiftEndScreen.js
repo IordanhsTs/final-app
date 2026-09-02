@@ -175,7 +175,9 @@ export default function ShiftEndScreen({ isDarkMode, driverName, onBack, onEnded
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.background }}
+      // Ίδιο paddingTop με τις υπόλοιπες οθόνες του μενού (ScreenShell) — χωρίς
+      // αυτό η κεφαλίδα έπεφτε πάνω στην ώρα/εικονίδια του κινητού.
+      style={{ flex: 1, backgroundColor: theme.background, paddingTop: 40 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScreenHeader isDarkMode={isDarkMode} onBack={onBack} driverName={driverName} />
@@ -216,8 +218,11 @@ export default function ShiftEndScreen({ isDarkMode, driverName, onBack, onEnded
         ) : null}
       </ScrollView>
 
+      {/* Ίδιο γενναιόδωρο padding στο Android με το VehicleSelectScreen — ο
+          λόγος (edgeToEdgeEnabled κρύβει το κουμπί πίσω από την μπάρα
+          πλοήγησης) είναι εξηγημένος εκεί. */}
       {state !== null ? (
-        <View style={{ paddingBottom: 22, paddingTop: 6, backgroundColor: theme.background }}>
+        <View style={{ paddingBottom: Platform.OS === 'android' ? 56 : 22, paddingTop: 6, backgroundColor: theme.background }}>
           <PrimaryButton
             isDarkMode={isDarkMode}
             icon={isLogout ? 'log-out' : 'check'}

@@ -28,18 +28,35 @@ import { ScreenHeader, ScreenTitle, InfoBox, PrimaryButton, OdometerInput, forma
 // δουλειά του. Ένα πεσμένο δίκτυο στις 8 το πρωί δεν επιτρέπεται να σταματήσει
 // τη διανομή για μια δήλωση μηχανής — γι' αυτό υπάρχει και η «Συνέχεια χωρίς
 // δήλωση», και γι' αυτό ο άδειος στόλος προσπερνιέται σιωπηλά.
+//
+// ── ΑΛΛΑΓΗ ΜΗΧΑΝΗΣ ΜΕΣΑ ΣΤΗ ΒΑΡΔΙΑ (αίτημα πελάτη 13/08/2026) ────────────────
+// Αν ο διανομέας κρατά ήδη εταιρικό μηχανάκι (π.χ. moto1) και ανοίξει αυτή την
+// οθόνη για να πάρει άλλο, το `set_shift_vehicle` θα έκλεινε σιωπηλά τη βάρδια
+// του moto1 ΧΩΡΙΣ τελική ένδειξη κοντέρ — τα χιλιόμετρά του θα έμεναν στον
+// αέρα μέχρι κάποιος άλλος να πάρει ποτέ το moto1 (owner-detection, 0020). Το
+// βήμα 'prevOdometer' κλείνει πρώτα ΑΥΤΟ το μηχανάκι με ρητή δήλωση —ίδιο RPC
+// με τη «Λήξη βάρδιας» (`end_shift_odometer`)— και μετά αφήνει τον διανομέα να
+// προχωρήσει κανονικά στην επιλογή του επόμενου.
+const CONFIRM_ABOVE_KM = 300;
 
 export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driverName }) {
   const theme = Colors[isDarkMode ? 'dark' : 'light'];
   const isGate = !onBack;
 
-  const [step, setStep] = useState('choice');   // 'choice' | 'pick' | 'odometer' | 'done'
+  // null = ακόμα ελέγχει αν χρειάζεται πρώτα να κλείσει προηγούμενο μηχανάκι
+  const [step, setStep] = useState(null);   // 'prevOdometer' | 'choice' | 'pick' | 'odometer' | 'done'
   const [vehicles, setVehicles] = useState(null); // null = φορτώνει
   const [selected, setSelected] = useState(null);
   const [km, setKm] = useState('');
   const [result, setResult] = useState(null);   // η απάντηση του set_shift_vehicle
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  const [prevVehicle, setPrevVehicle] = useState(null); // { code, start } αν κρατά ήδη εταιρικό
+  const [prevKm, setPrevKm] = useState('');
+  const [prevSaving, setPrevSaving] = useState(false);
+  const [prevError, setPrevError] = useState(null);
+  const [prevConfirmBig, setPrevConfirmBig] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -54,12 +71,58 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
 
   useEffect(() => { load(); }, [load]);
 
+  // Πρώτο πράγμα που ελέγχεται: κρατά ήδη εταιρικό μηχανάκι από πριν;
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error: err } = await supabase.rpc('driver_vehicle_state');
+      if (!alive) return;
+      // Fail-open: χωρίς απάντηση δεν ξέρουμε τι κρατούσε — δεν τον κλειδώνουμε.
+      if (err) { setStep('choice'); return; }
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row && row.vehicle_choice === 'company' && row.vehicle_id) {
+        const seed = row.start_odometer_km ?? row.vehicle_odometer_km;
+        setPrevVehicle({ code: row.vehicle_code, start: row.start_odometer_km ?? null });
+        setPrevKm(seed !== null && seed !== undefined ? String(Math.round(Number(seed))) : '');
+        setStep('prevOdometer');
+      } else {
+        setStep('choice');
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const prevStart = prevVehicle && prevVehicle.start !== null && prevVehicle.start !== undefined
+    ? Number(prevVehicle.start) : null;
+  const prevTyped = prevKm === '' ? null : Number(prevKm);
+  const prevShiftKm = prevStart !== null && prevTyped !== null ? prevTyped - prevStart : null;
+  const prevTooLow = prevShiftKm !== null && prevShiftKm < 0;
+
+  async function submitPrevOdometer() {
+    if (prevTooLow) return;
+    if (prevShiftKm !== null && prevShiftKm > CONFIRM_ABOVE_KM && !prevConfirmBig) {
+      setPrevConfirmBig(true);
+      return;
+    }
+    setPrevSaving(true);
+    setPrevError(null);
+    const { error: err } = await supabase.rpc('end_shift_odometer', {
+      p_odometer_km: prevKm === '' ? null : Number(prevKm),
+    });
+    setPrevSaving(false);
+    if (err) {
+      setPrevError(err.message || 'Η καταχώρηση δεν αποθηκεύτηκε.');
+      return;
+    }
+    setStep('choice');
+  }
+
   // ΑΔΕΙΟΣ ΣΤΟΛΟΣ = Η ΕΡΩΤΗΣΗ ΔΕΝ ΕΧΕΙ ΝΟΗΜΑ. Στο διάστημα ανάμεσα στην
   // ενημέρωση της εφαρμογής και στη στιγμή που ο διαχειριστής θα καταχωρήσει τα
   // μηχανάκια, το φράγμα θα ρωτούσε κάθε μέρα κάτι που δεν έχει απάντηση.
   useEffect(() => {
-    if (isGate && vehicles && vehicles.length === 0 && !error) onDone();
-  }, [isGate, vehicles, error, onDone]);
+    if (isGate && step === 'choice' && vehicles && vehicles.length === 0 && !error) onDone();
+  }, [isGate, step, vehicles, error, onDone]);
 
   const chosen = (vehicles || []).find((v) => v.id === selected) || null;
 
@@ -94,6 +157,85 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
     borderRadius: 16,
     padding: 16,
   };
+
+  // ── Βήμα 0 (μόνο αν κρατά ήδη εταιρικό): κλείσιμο του προηγούμενου ─────────
+  const renderPrevOdometer = () => (
+    <View style={{ gap: 14 }}>
+      <View style={{ ...card, marginHorizontal: 16, alignItems: 'center', paddingVertical: 18 }}>
+        <Text style={{ color: theme.subtitle, fontSize: 12, fontWeight: '800', letterSpacing: 0.6 }}>
+          ΞΕΚΙΝΗΣΑΤΕ ΤΗ ΒΑΡΔΙΑ ΣΤΑ
+        </Text>
+        <Text style={{ color: theme.text, fontSize: 30, fontWeight: '900', marginTop: 4 }}>
+          {prevStart === null ? '—' : formatOdometer(prevStart)}
+        </Text>
+        <Text style={{ color: theme.subtitle, fontSize: 12.5, marginTop: 3 }}>
+          {(prevVehicle && prevVehicle.code) || ''}
+        </Text>
+      </View>
+
+      <InfoBox isDarkMode={isDarkMode}>
+        Πριν πάρετε άλλο μηχανάκι, γράψτε τι δείχνει τώρα το κοντέρ του{' '}
+        {(prevVehicle && prevVehicle.code) || 'προηγούμενου'}.
+      </InfoBox>
+
+      <OdometerInput
+        isDarkMode={isDarkMode}
+        value={prevKm}
+        onChangeText={(t) => { setPrevKm(t); setPrevConfirmBig(false); }}
+        onSubmitEditing={submitPrevOdometer}
+      />
+
+      {prevShiftKm !== null ? (
+        <View style={{
+          ...card, marginHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12,
+          borderColor: prevTooLow ? '#EF4444' : theme.accent,
+        }}>
+          <Feather name={prevTooLow ? 'alert-triangle' : 'map'} size={22} color={prevTooLow ? '#EF4444' : theme.accent} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: theme.subtitle, fontSize: 11.5, fontWeight: '800' }}>
+              ΧΙΛΙΟΜΕΤΡΑ ΒΑΡΔΙΑΣ
+            </Text>
+            <Text style={{ color: prevTooLow ? '#EF4444' : theme.text, fontSize: 22, fontWeight: '900', marginTop: 2 }}>
+              {prevTooLow ? 'Λιγότερα από την αρχή' : `${formatOdometer(prevShiftKm)} χλμ`}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {prevTooLow ? (
+        <InfoBox isDarkMode={isDarkMode} icon="alert-triangle" tone="warn">
+          Το κοντέρ δεν γυρίζει πίσω. Ελέγξτε ξανά το νούμερο — η βάρδια ξεκίνησε στα {formatOdometer(prevStart)} χλμ.
+        </InfoBox>
+      ) : prevConfirmBig ? (
+        <InfoBox isDarkMode={isDarkMode} icon="alert-triangle" tone="warn">
+          {formatOdometer(prevShiftKm)} χλμ σε μία βάρδια είναι πολλά. Αν το νούμερο είναι σωστό, πατήστε ξανά για επιβεβαίωση.
+        </InfoBox>
+      ) : null}
+
+      {prevError ? (
+        <View style={{ marginTop: 2 }}>
+          <InfoBox isDarkMode={isDarkMode} icon="alert-triangle" tone="warn">
+            {prevError}
+          </InfoBox>
+          {/* ΔΙΕΞΟΔΟΣ (fail-open): ένα πεσμένο δίκτυο δεν πρέπει να εμποδίζει την
+              επιλογή νέου μηχανήματος — τα χιλιόμετρα του παλιού τα κλείνει η
+              επόμενη μέτρηση πάνω του (owner-detection, 0020). */}
+          <View style={{ paddingHorizontal: 16 }}>
+            <TouchableOpacity
+              onPress={() => setStep('choice')}
+              style={{
+                height: 46, borderRadius: 12,
+                alignItems: 'center', justifyContent: 'center',
+                borderWidth: 1, borderColor: theme.border,
+              }}
+            >
+              <Text style={{ color: theme.subtitle, fontWeight: '800' }}>ΣΥΝΕΧΕΙΑ ΧΩΡΙΣ ΚΑΤΑΓΡΑΦΗ</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
 
   // ── Βήμα 1: εταιρικό ή δικό του ───────────────────────────────────────────
   const renderChoice = () => (
@@ -204,6 +346,17 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
                     </Text>
                   </View>
                 ) : null}
+                {/* Ανεξάρτητο από το `busy`: μετά το καθημερινό reset των 2πμ το
+                    current_vehicle_id έχει ήδη μηδενιστεί, αλλά η βάρδια που δεν
+                    έκλεισε ποτέ παραμένει — αυτό είναι το μόνο σημάδι της. */}
+                {v.pending_driver_name ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 }}>
+                    <Feather name="alert-triangle" size={12} color="#FBBF24" />
+                    <Text style={{ color: '#FBBF24', fontSize: 12, fontWeight: '700' }}>
+                      {v.pending_driver_name} δεν κατέγραψε χιλιόμετρα λήξης
+                    </Text>
+                  </View>
+                ) : null}
               </View>
 
               {on ? <Feather name="check-circle" size={22} color={theme.accent} /> : null}
@@ -238,8 +391,9 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
         </View>
 
         <InfoBox isDarkMode={isDarkMode}>
-          Κοιτάξτε τώρα το κοντέρ της μηχανής. Αν δείχνει άλλο νούμερο, γράψτε το σωστό —
-          η διαφορά καταγράφεται και την ελέγχει το κέντρο.
+          {chosen && chosen.pending_driver_name
+            ? `Καλησπέρα! Χθες ο/η ${chosen.pending_driver_name} που χρησιμοποίησε το ${chosen.code} δεν καταχώρησε χιλιόμετρα κατά τη λήξη της βάρδιας. Είναι αυτά τα χιλιόμετρα που βλέπετε στην οθόνη τα χιλιόμετρα στο κοντέρ της μηχανής; Αν όχι, γράψτε τα σωστά — η διαφορά θα προστεθεί σε αυτόν.`
+            : 'Κοιτάξτε τώρα το κοντέρ της μηχανής. Αν δείχνει άλλο νούμερο, γράψτε το σωστό — η διαφορά καταγράφεται και την ελέγχει το κέντρο.'}
         </InfoBox>
 
         <OdometerInput
@@ -294,6 +448,7 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
   };
 
   const titles = {
+    prevOdometer: 'Κλείστε το προηγούμενο μηχανάκι',
     choice: 'Με τι θα δουλέψετε;',
     pick: 'Ποιο μηχανάκι θα οδηγήσετε;',
     odometer: 'Τι δείχνει το κοντέρ;',
@@ -302,7 +457,10 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.background }}
+      // Ίδιο paddingTop με τις υπόλοιπες οθόνες του μενού (ScreenShell) —
+      // μόνο όταν υπάρχει ScreenHeader· στο ΦΡΑΓΜΑ (χωρίς onBack) η δική του
+      // ScrollView κρατά ήδη το σωστό κενό από την κορυφή.
+      style={{ flex: 1, backgroundColor: theme.background, paddingTop: onBack ? 40 : 0 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {onBack ? <ScreenHeader isDarkMode={isDarkMode} onBack={onBack} driverName={driverName} /> : null}
@@ -312,7 +470,11 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <ScreenTitle isDarkMode={isDarkMode} icon={step === 'odometer' ? 'hash' : 'truck'}>
+        {step === null ? (
+          <ActivityIndicator size="large" color={theme.accent} style={{ marginTop: 40 }} />
+        ) : (
+        <>
+        <ScreenTitle isDarkMode={isDarkMode} icon={step === 'odometer' || step === 'prevOdometer' ? 'hash' : 'truck'}>
           {titles[step]}
         </ScreenTitle>
 
@@ -346,7 +508,8 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
           </View>
         ) : null}
 
-        {step === 'choice' ? renderChoice()
+        {step === 'prevOdometer' ? renderPrevOdometer()
+          : step === 'choice' ? renderChoice()
           : step === 'pick' ? renderPick()
           : step === 'odometer' ? renderOdometer()
           : renderDone()}
@@ -382,10 +545,27 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
             </View>
           </View>
         ) : null}
+        </>
+        )}
       </ScrollView>
 
-      {step === 'pick' && vehicles && vehicles.length > 0 ? (
-        <View style={{ paddingBottom: 22, paddingTop: 6, backgroundColor: theme.background }}>
+      {/* paddingBottom γενναιόδωρο στο Android: edgeToEdgeEnabled (app.json) βάζει
+          το περιεχόμενο πίσω από την μπάρα πλοήγησης του συστήματος, και δεν έχουμε
+          react-native-safe-area-context (native module, θα ήθελε νέο EAS build) για
+          πραγματικό inset — βλ. ίδιο μοτίβο στο DriverDashboard.js. Χωρίς αυτό το
+          κουμπί ΞΕΚΙΝΑΩ/ΣΥΝΕΧΕΙΑ κρύβεται πίσω από τα κουμπιά «πίσω/home/πρόσφατα». */}
+      {step === 'prevOdometer' ? (
+        <View style={{ paddingBottom: Platform.OS === 'android' ? 56 : 22, paddingTop: 6, backgroundColor: theme.background }}>
+          <PrimaryButton
+            isDarkMode={isDarkMode}
+            icon="check"
+            label={prevSaving ? 'ΚΑΤΑΧΩΡΗΣΗ…' : prevConfirmBig ? 'ΝΑΙ, ΕΙΝΑΙ ΣΩΣΤΟ' : 'ΣΥΝΕΧΕΙΑ'}
+            disabled={prevSaving || prevTooLow || prevKm === ''}
+            onPress={submitPrevOdometer}
+          />
+        </View>
+      ) : step === 'pick' && vehicles && vehicles.length > 0 ? (
+        <View style={{ paddingBottom: Platform.OS === 'android' ? 56 : 22, paddingTop: 6, backgroundColor: theme.background }}>
           <PrimaryButton
             isDarkMode={isDarkMode}
             icon="arrow-right"
@@ -402,7 +582,7 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
           />
         </View>
       ) : step === 'odometer' ? (
-        <View style={{ paddingBottom: 22, paddingTop: 6, backgroundColor: theme.background }}>
+        <View style={{ paddingBottom: Platform.OS === 'android' ? 56 : 22, paddingTop: 6, backgroundColor: theme.background }}>
           <PrimaryButton
             isDarkMode={isDarkMode}
             icon="check"
@@ -412,7 +592,7 @@ export default function VehicleSelectScreen({ isDarkMode, onDone, onBack, driver
           />
         </View>
       ) : step === 'done' ? (
-        <View style={{ paddingBottom: 22, paddingTop: 6, backgroundColor: theme.background }}>
+        <View style={{ paddingBottom: Platform.OS === 'android' ? 56 : 22, paddingTop: 6, backgroundColor: theme.background }}>
           <PrimaryButton isDarkMode={isDarkMode} icon="arrow-right" label="ΣΥΝΕΧΕΙΑ" onPress={onDone} />
         </View>
       ) : null}
