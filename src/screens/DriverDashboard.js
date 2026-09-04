@@ -10,6 +10,7 @@ import { getStyles, Colors, CardColors } from '../styles/globalStyles';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getLastReadAt } from '../services/announcementsStore';
+import { liveChannel, skipFirst } from '../services/live';
 import DriverMenu from './DriverMenu';
 import HistoryScreen from './HistoryScreen';
 import AvailabilityScreen from './AvailabilityScreen';
@@ -379,8 +380,13 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     releaseDue();
     const releaseTimer = setInterval(releaseDue, 15000);
 
-    const channel = supabase
-      .channel(`driver_orders_${currentUser.id}`)
+    // ΧΩΡΙΣ onResync: ένα αυτόματο ξαναδιάβασμα καταλήγει στο fetchOrders, που
+    // κρίνει τον 20δευτερο συναγερμό ανάθεσης. Το κανάλι ξαναχτίζεται μόνο του,
+    // αλλά η λίστα ανανεώνεται από τους δρόμους που ήδη υπάρχουν: push, επιστροφή
+    // στο προσκήνιο, τράβηγμα προς τα κάτω.
+    const stopOrdersChannel = liveChannel({
+      name: `driver_orders_${currentUser.id}`,
+      bind: (channel) => channel
       .on('postgres_changes', { event: '*', schema: getTenantSchema(), table: 'orders' }, (payload) => {
         // Προγραμματισμένη παραγγελία που μόλις «ωρίμασε»: ο πελάτης θέλει να ηχεί
         // σαν κανονική νέα παραγγελία ώστε να καταλάβει ο διανομέας ότι ήρθε.
@@ -394,8 +400,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           triggerNotification();
         }
         fetchOrders();
-      })
-      .subscribe();
+      }),
+    });
 
     const appStateSubscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
@@ -416,8 +422,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     });
 
     // ─── ΛΗΨΗ ΜΗΝΥΜΑΤΩΝ ΑΠΟ ΚΕΝΤΡΟ ΕΛΕΓΧΟΥ (BROADCAST) ───
-    const systemAlertChannel = supabase
-      .channel('system_alerts')
+    // ΠΡΟΣΟΧΗ: unique:false — σε broadcast το όνομα ΕΙΝΑΙ η διεύθυνση και πρέπει να
+    // ταιριάζει ακριβώς με αυτό που στέλνει το κέντρο.
+    const stopSystemAlertChannel = liveChannel({
+      name: 'system_alerts',
+      unique: false,
+      bind: (channel) => channel
       .on('broadcast', { event: 'admin_message' }, (payload) => {
         const data = payload.payload;
         if (!data) return;
@@ -429,8 +439,8 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           // του ήχος (messagePlayer), ξεχωριστός από παραγγελία/ανάθεση.
           startAlarm(0, messagePlayer);
         }
-      })
-      .subscribe();
+      }),
+    });
 
     // ─── ΑΝΑΚΟΙΝΩΣΕΙΣ ΜΕΤΑΞΥ ΔΙΑΝΟΜΕΩΝ (BROADCAST) ───
     // Ξεχωριστό κανάλι από το 'system_alerts' του κέντρου: άλλος αποστολέας,
@@ -438,19 +448,29 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
     // δεν ακούνε τα καταστήματα, που είναι κι αυτά συνδρομητές στο system_alerts.
     // Το ΙΔΙΟ κανάλι χρησιμεύει και για την ΑΠΟΣΤΟΛΗ (βλ. sendDriverBroadcast):
     // το Realtime απαιτεί ενεργή συνδρομή για να επιτρέψει broadcast.
-    const driverBroadcastChannel = supabase
-      .channel('driver_broadcasts')
-      .on('broadcast', { event: 'driver_message' }, (payload) => {
-        // Το websocket ζει και στο παρασκήνιο: αν φτάσει από εκεί, τον ήχο τον
-        // έχει ήδη αναλάβει το push του λειτουργικού.
-        receiveDriverBroadcast(payload.payload, AppState.currentState !== 'active');
-      })
-      .subscribe();
-    broadcastChannel.current = driverBroadcastChannel;
+    const stopDriverBroadcastChannel = liveChannel({
+      name: 'driver_broadcasts',
+      unique: false,
+      bind: (channel) => {
+        // Η αναφορά ανανεώνεται σε ΚΑΘΕ ξαναχτίσιμο: αλλιώς, μετά από πεσμένο
+        // κανάλι, η ανακοίνωση του διανομέα θα έφευγε προς νεκρό κανάλι.
+        broadcastChannel.current = channel;
+        return channel
+          .on('broadcast', { event: 'driver_message' }, (payload) => {
+            // Το websocket ζει και στο παρασκήνιο: αν φτάσει από εκεί, τον ήχο τον
+            // έχει ήδη αναλάβει το push του λειτουργικού.
+            receiveDriverBroadcast(payload.payload, AppState.currentState !== 'active');
+          });
+      },
+    });
 
     // ─── ΛΗΨΗ ΑΛΛΑΓΩΝ GPS ΣΕ ΠΡΑΓΜΑΤΙΚΟ ΧΡΟΝΟ ΓΙΑ MONITORING ───
-    const driverChannel = supabase
-      .channel(`driver_monitor_${currentUser.id}`)
+    const stopDriverMonitorChannel = liveChannel({
+      name: `driver_monitor_${currentUser.id}`,
+      // Ακίνδυνο ξαναδιάβασμα: ρωτά μόνο το last_seen της δικής μου γραμμής, ίδιο
+      // ερώτημα με αυτό που τρέχει ήδη σε κάθε επιστροφή στο προσκήνιο.
+      onResync: skipFirst(refreshLocationStatus),
+      bind: (channel) => channel
       .on('postgres_changes', { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` }, (payload) => {
         if (payload.new.latitude && payload.new.longitude) {
           const now = new Date();
@@ -458,18 +478,18 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           setLocationOk(true);
           setLastLocationUpdate(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
         }
-      })
-      .subscribe();
+      }),
+    });
 
     return () => {
       clearInterval(releaseTimer);
       if (notificationListener) notificationListener.remove();
       if (responseListener) responseListener.remove();
-      supabase.removeChannel(channel);
-      supabase.removeChannel(systemAlertChannel);
-      supabase.removeChannel(driverBroadcastChannel);
+      stopOrdersChannel();
+      stopSystemAlertChannel();
+      stopDriverBroadcastChannel();
       broadcastChannel.current = null;
-      supabase.removeChannel(driverChannel);
+      stopDriverMonitorChannel();
       appStateSubscription.remove();
     };
   }, []); // Αφαιρέσαμε το player από εδώ για να μην κλείνει η σύνδεση!

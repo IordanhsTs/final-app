@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, onBackendChange, onTokenRefresh, clearDriverPresenceEverywhere, getTenantSchema, consumeIntentionalSignOut, hardSignOut } from './supabase';
 import { startNativeTracking, stopNativeTracking, ensureBatteryExemption, updateNativeToken } from './src/services/nativeLocationService';
 import { readNativeTokens, cacheDriverProfile, readCachedDriverProfile } from './src/services/sessionStore';
+import { liveChannel, skipFirst, onWake } from './src/services/live';
 // Εισαγωγή των Οθονών
 import LoginScreen from './src/screens/LoginScreen';
 import DriverDashboard from './src/screens/DriverDashboard';
@@ -64,6 +65,10 @@ export default function App() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [backendVersion, setBackendVersion] = useState(0);
   const myDeviceId = useRef(null);
+  // Έγινε ΟΝΤΩΣ η εγγραφή του active_device_id; Μέχρι να ολοκληρωθεί, μια άμεση
+  // ανάγνωση της γραμμής θα έβλεπε ακόμα το id της ΠΡΟΗΓΟΥΜΕΝΗΣ συσκευής και θα
+  // αυτο-αποσυνδεόταν αμέσως μετά το login. Βλ. checkStatusNow.
+  const deviceClaimed = useRef(false);
   // Γίνεται true ΜΟΛΙΣ διαβαστεί η αποθηκευμένη επιλογή. Χωρίς αυτό, το effect
   // παρακάτω θα έγραφε την προεπιλογή πάνω στην αποθηκευμένη τιμή πριν προλάβει
   // να φορτωθεί, και η επιλογή του διανομέα θα χανόταν σε κάθε εκκίνηση.
@@ -229,7 +234,8 @@ export default function App() {
       try {
         const deviceId = await getDeviceId();
         myDeviceId.current = deviceId;
-        await supabase.from('drivers').update({ active_device_id: deviceId }).eq('id', currentUser.id);
+        const { error } = await supabase.from('drivers').update({ active_device_id: deviceId }).eq('id', currentUser.id);
+        if (!error) deviceClaimed.current = true;
       } catch (_) {}
     })();
   }, [currentUser]);
@@ -271,32 +277,84 @@ export default function App() {
   }, [currentUser, backendVersion]);
 
   // --- LISTEN FOR ADMIN DEACTIVATION ---
+  //
+  // ΤΟ ΜΟΝΟ κανάλι της εφαρμογής χωρίς εφεδρικό δρόμο: απενεργοποίηση/μπλοκάρισμα
+  // και ο κανόνας «μία συσκευή» ταξιδεύουν ΜΟΝΟ από εδώ — δεν υπάρχει push από
+  // πίσω τους. Με νεκρό κανάλι (βλ. src/services/live.js) ο απενεργοποιημένος
+  // διανομέας συνέχιζε να δουλεύει κανονικά και ο ίδιος λογαριασμός έμενε
+  // ζωντανός σε δύο κινητά. Γι' αυτό εδώ έχουμε ΚΑΙ τα δύο: κανάλι που
+  // ξαναχτίζεται μόνο του, ΚΑΙ άμεσο διάβασμα σε κάθε επιστροφή στο προσκήνιο.
   useEffect(() => {
     if (!currentUser) return;
 
-    const statusChannel = supabase
-      .channel(`driver_status_${currentUser.id}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` }, async (payload) => {
-        if (payload.new && (payload.new.is_active === false || payload.new.is_blocked === true)) {
-          await clearDriverPresenceEverywhere(currentUser.id);
-          supabase.removeAllChannels();
-          await endSession({ global: true });
-        } else if (
-          payload.new && payload.new.active_device_id &&
-          myDeviceId.current && payload.new.active_device_id !== myDeviceId.current
-        ) {
-          // SINGLE-DEVICE: ο λογαριασμός συνδέθηκε σε ΑΛΛΗ συσκευή → αυτή αυτο-αποσυνδέεται.
-          // ΟΧΙ clearDriverPresence (το row ανήκει πλέον στη νέα συσκευή) + local scope
-          // ώστε να ΜΗΝ ακυρωθεί το session της νέας συσκευής.
-          Alert.alert("Αποσύνδεση", "Ο λογαριασμός σας συνδέθηκε σε άλλη συσκευή.");
-          supabase.removeAllChannels();
-          await endSession({ global: false });
-        }
-      })
-      .subscribe();
+    // Μία λογική για τις δύο διαδρομές (realtime event και άμεση ανάγνωση).
+    const applyStatus = async (row) => {
+      if (!row) return;
+
+      if (row.is_active === false || row.is_blocked === true) {
+        await clearDriverPresenceEverywhere(currentUser.id);
+        supabase.removeAllChannels();
+        await endSession({ global: true });
+        return;
+      }
+
+      // SINGLE-DEVICE: ο λογαριασμός συνδέθηκε σε ΑΛΛΗ συσκευή → αυτή αυτο-αποσυνδέεται.
+      // ΟΧΙ clearDriverPresence (το row ανήκει πλέον στη νέα συσκευή) + local scope
+      // ώστε να ΜΗΝ ακυρωθεί το session της νέας συσκευής.
+      //
+      // Ο κανόνας εφαρμόζεται μόνο όταν ξέρουμε τι λέει η γραμμή για ΕΜΑΣ: είτε
+      // επειδή γράψαμε εμείς το id μας (deviceClaimed), είτε επειδή σκόπιμα ΔΕΝ
+      // διεκδικήσαμε τη συσκευή (deviceClaimAllowed=false, όταν δεν φόρτωσε το
+      // προφίλ). Στο ενδιάμεσο — μόλις μπήκαμε και η εγγραφή δεν έχει ολοκληρωθεί —
+      // η γραμμή δείχνει ακόμα την προηγούμενη συσκευή και θα βγάζαμε τον διανομέα
+      // έξω αμέσως μετά το login.
+      const canJudgeDevice = !deviceClaimAllowed.current || deviceClaimed.current;
+      if (
+        canJudgeDevice && row.active_device_id &&
+        myDeviceId.current && row.active_device_id !== myDeviceId.current
+      ) {
+        Alert.alert("Αποσύνδεση", "Ο λογαριασμός σας συνδέθηκε σε άλλη συσκευή.");
+        supabase.removeAllChannels();
+        await endSession({ global: false });
+      }
+    };
+
+    // Άμεση ανάγνωση της γραμμής μου. FAIL-OPEN: αν δεν απαντήσει η βάση δεν
+    // συμπεραίνουμε τίποτα — η άγνοια δεν είναι λόγος αποσύνδεσης (ίδια αρχή με
+    // το restoreSession· ακριβώς έτσι «έβγαινε» μόνος του ο διανομέας παλιότερα).
+    const checkStatusNow = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('drivers')
+          .select('is_active, is_blocked, active_device_id')
+          .eq('id', currentUser.id)
+          .maybeSingle();
+        if (error || !data) return;
+        await applyStatus(data);
+      } catch (_) {}
+    };
+
+    const stopStatusChannel = liveChannel({
+      name: `driver_status_${currentUser.id}`,
+      // Σε κάθε επανασύνδεση: ό,τι άλλαξε όσο το κανάλι ήταν πεσμένο δεν έρχεται
+      // ποτέ ως event, οπότε το διαβάζουμε κατευθείαν.
+      onResync: skipFirst(checkStatusNow),
+      bind: (channel) => channel
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: getTenantSchema(), table: 'drivers', filter: `id=eq.${currentUser.id}` },
+          (payload) => { applyStatus(payload.new); }
+        ),
+    });
+
+    // Και σε κάθε επιστροφή στο προσκήνιο, ανεξάρτητα από την υγεία του καναλιού:
+    // ένα ελαφρύ ερώτημα. Χωρίς αυτό, μια απενεργοποίηση που έγινε όσο η εφαρμογή
+    // ήταν παγωμένη στο παρασκήνιο δεν θα μαθευόταν ποτέ.
+    const offWake = onWake(checkStatusNow);
 
     return () => {
-      supabase.removeChannel(statusChannel);
+      stopStatusChannel();
+      offWake();
     };
   }, [currentUser, backendVersion]);
 
