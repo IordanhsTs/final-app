@@ -56,7 +56,7 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
     }
 
     const { data } = await supabase.from('orders')
-      .select('*, stores(name, category)')
+      .select('*, stores(name, category, delivery_fee)')
       .eq('status', 'completed').eq('driver_id', currentUser.id)
       .gte('completed_at', start.toISOString())
       .lte('completed_at', end.toISOString());
@@ -113,6 +113,16 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
   // Πλέον διαβάζουμε το `stores.category`, που είναι συμπληρωμένο σε όλα τα
   // καταστήματα και δεν εξαρτάται από την τιμολόγηση.
   let coffeeCount = 0; let foodCount = 0; let kioskCount = 0; let otherCount = 0;
+  // ── Συνολικό κέρδος ───────────────────────────────────────────────────────
+  // ΙΔΙΟΣ ΤΥΠΟΣ ΜΕ ΤΗΝ ΕΚΚΑΘΑΡΙΣΗ ΤΟΥ ADMIN (BillingDashboard.jsx): αμοιβή =
+  // `delivery_fee − 0,05`, δηλαδή 0,10 € στον καφέ και 0,13 € σε φαγητό/ψιλικά.
+  // Αν οι δύο τύποι αποκλίνουν, ο διανομέας θα βλέπει άλλο ποσό από αυτό που
+  // πληρώνεται — άλλαξέ τους ΠΑΝΤΑ μαζί.
+  //
+  // Το `0,05` ήταν `0,50` μέχρι τις 05/09/2026 και έβγαζε αρνητική αμοιβή· εδώ
+  // το `Math.max(0, …)` το έκρυβε, γι' αυτό το κέρδος έδειχνε πάντα 0,00 €.
+  const COMPANY_SHARE = 0.05;
+  let totalRevenue = 0;
   let totalKm = 0;
   const storeCounts = {};
 
@@ -130,6 +140,8 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
       case 'kiosk':  kioskCount++;  break;
       default:       otherCount++;  break;
     }
+    const fee = parseFloat(o.stores?.delivery_fee);
+    if (!isNaN(fee)) totalRevenue += Math.max(0, fee - COMPANY_SHARE);
     const sName = o.stores?.name || 'Άγνωστο Κατάστημα';
     storeCounts[sName] = (storeCounts[sName] || 0) + 1;
     const d = parseFloat(o.distance_km);
@@ -138,6 +150,7 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
 
   const totalOrders = filteredHistory.length;
   const avgTime = countWithTime > 0 ? (totalDeliveryMins / countWithTime).toFixed(1) : 0;
+  const formattedRevenue = totalRevenue.toFixed(2);
 
   // ── Κοινά στυλ ────────────────────────────────────────────────────────────
   const card = {
@@ -255,6 +268,20 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
           })}
         </ScrollView>
       )}
+
+      {/* ── Κέρδος: το νούμερο που κοιτάει πρώτο ο διανομέας ───────────────── */}
+      <View style={[card, {
+        marginHorizontal: 16, marginBottom: 10, padding: 18, alignItems: 'center',
+        borderColor: theme.accent,
+        backgroundColor: isDarkMode ? 'rgba(212,168,83,0.07)' : 'rgba(197,160,102,0.08)',
+      }]}>
+        <Text style={{ fontSize: 11.5, color: theme.subtitle, fontWeight: '700', letterSpacing: 0.8 }}>
+          ΣΥΝΟΛΙΚΟ ΚΕΡΔΟΣ
+        </Text>
+        <Text style={{ fontSize: 36, fontWeight: '900', color: theme.accent, marginTop: 4 }}>
+          {formattedRevenue}€
+        </Text>
+      </View>
 
       {/* ── Τα νούμερα της περιόδου ────────────────────────────────────────── */}
       {/* Αίτημα πελάτη 05/09/2026: καμία τιμή δίπλα στο είδος — σκέτα πλήθη. */}
