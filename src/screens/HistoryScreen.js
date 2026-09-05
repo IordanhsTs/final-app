@@ -56,7 +56,7 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
     }
 
     const { data } = await supabase.from('orders')
-      .select('*, stores(name, delivery_fee)')
+      .select('*, stores(name, category)')
       .eq('status', 'completed').eq('driver_id', currentUser.id)
       .gte('completed_at', start.toISOString())
       .lte('completed_at', end.toISOString());
@@ -106,8 +106,13 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
     setStoreFilter((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   let totalDeliveryMins = 0; let countWithTime = 0;
-  let coffeeCount = 0; let foodCount = 0;
-  let totalRevenue = 0;
+  // ── Πλήθη ανά είδος καταστήματος ──────────────────────────────────────────
+  // ΤΙ ΕΣΠΑΣΕ (05/09/2026): εδώ γινόταν `fee === 1.5 → καφές`, `fee === 1.8 →
+  // φαγητό`. Οι πραγματικές τιμές στη βάση είναι 0,15 και 0,18, οπότε ΚΑΜΙΑ
+  // συνθήκη δεν έπιανε ποτέ: κάθε διανομέας έβλεπε Φαγητά 0 και Καφέδες 0.
+  // Πλέον διαβάζουμε το `stores.category`, που είναι συμπληρωμένο σε όλα τα
+  // καταστήματα και δεν εξαρτάται από την τιμολόγηση.
+  let coffeeCount = 0; let foodCount = 0; let kioskCount = 0; let otherCount = 0;
   let totalKm = 0;
   const storeCounts = {};
 
@@ -116,15 +121,14 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
       totalDeliveryMins += (new Date(o.completed_at) - new Date(o.accepted_at)) / 60000;
       countWithTime++;
     }
-    const fee = parseFloat(o.stores?.delivery_fee);
-    if (fee === 1.5) {
-      coffeeCount++;
-      totalRevenue += 1.0;
-    } else if (fee === 1.8) {
-      foodCount++;
-      totalRevenue += 1.3;
-    } else if (!isNaN(fee)) {
-      totalRevenue += Math.max(0, fee - 0.5); // άλλη χρέωση: αφαιρούμε τα 50 λεπτά της εταιρείας
+    // Το `otherCount` υπάρχει ώστε ένα κατάστημα χωρίς είδος να ΜΗΝ εξαφανίζεται
+    // σιωπηλά: αλλιώς τα τρία κουτάκια δεν θα άθροιζαν στις «Παραγγελίες» και
+    // κανείς δεν θα καταλάβαινε γιατί. Το κουτάκι εμφανίζεται μόνο αν χρειαστεί.
+    switch (o.stores?.category) {
+      case 'coffee': coffeeCount++; break;
+      case 'food':   foodCount++;   break;
+      case 'kiosk':  kioskCount++;  break;
+      default:       otherCount++;  break;
     }
     const sName = o.stores?.name || 'Άγνωστο Κατάστημα';
     storeCounts[sName] = (storeCounts[sName] || 0) + 1;
@@ -134,7 +138,6 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
 
   const totalOrders = filteredHistory.length;
   const avgTime = countWithTime > 0 ? (totalDeliveryMins / countWithTime).toFixed(1) : 0;
-  const formattedRevenue = totalRevenue.toFixed(2);
 
   // ── Κοινά στυλ ────────────────────────────────────────────────────────────
   const card = {
@@ -253,28 +256,18 @@ export default function HistoryScreen({ currentUser, isDarkMode, onBack }) {
         </ScrollView>
       )}
 
-      {/* ── Κέρδος: το νούμερο που κοιτάει πρώτο ο διανομέας ───────────────── */}
-      <View style={[card, {
-        marginHorizontal: 16, marginBottom: 10, padding: 18, alignItems: 'center',
-        borderColor: theme.accent,
-        backgroundColor: isDarkMode ? 'rgba(212,168,83,0.07)' : 'rgba(197,160,102,0.08)',
-      }]}>
-        <Text style={{ fontSize: 11.5, color: theme.subtitle, fontWeight: '700', letterSpacing: 0.8 }}>
-          ΣΥΝΟΛΙΚΟ ΚΕΡΔΟΣ
-        </Text>
-        <Text style={{ fontSize: 36, fontWeight: '900', color: theme.accent, marginTop: 4 }}>
-          {formattedRevenue}€
-        </Text>
-      </View>
-
+      {/* ── Τα νούμερα της περιόδου ────────────────────────────────────────── */}
+      {/* Αίτημα πελάτη 05/09/2026: καμία τιμή δίπλα στο είδος — σκέτα πλήθη. */}
       <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 10 }}>
         {statBox(totalOrders, 'Παραγγελίες')}
         {statBox(`${avgTime}'`, 'Μ.Ο. Διανομής')}
+        {statBox(totalKm.toFixed(1), 'Συνολικά χλμ', '#208AEF')}
       </View>
       <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 10 }}>
-        {statBox(foodCount, 'Φαγητά (1.30€)', '#E53935')}
-        {statBox(coffeeCount, 'Καφέδες (1.00€)', '#8E44AD')}
-        {statBox(totalKm.toFixed(1), 'Συνολικά χλμ', '#208AEF')}
+        {statBox(foodCount, 'Φαγητά', '#E53935')}
+        {statBox(coffeeCount, 'Καφέδες', '#8E44AD')}
+        {statBox(kioskCount, 'Ψιλικά', '#0E9F6E')}
+        {otherCount > 0 ? statBox(otherCount, 'Άλλα', '#94A3B8') : null}
       </View>
 
       {/* ── Τρόπος προβολής ───────────────────────────────────────────────── */}
