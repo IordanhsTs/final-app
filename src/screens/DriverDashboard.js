@@ -156,7 +156,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [now, setNow] = useState(new Date());
 
   // ── Συναγερμός ανάθεσης από τον διαχειριστή ──
-  const [assignmentAlert, setAssignmentAlert] = useState(null);
+  // ΟΥΡΑ και όχι μία τιμή: δύο αναθέσεις στο ίδιο fetch (ή δεύτερη πριν πατηθεί
+  // το ΟΚ της πρώτης) έσβηναν η μία την άλλη — ο διανομέας έβλεπε μόνο τη μία.
+  const [assignmentAlerts, setAssignmentAlerts] = useState([]);
   // Παραγγελίες που κρατούσε ήδη ο διανομέας στο προηγούμενο fetch — για να
   // ξεχωρίσουμε τη ΝΕΑ ανάθεση από τα υπόλοιπα updates.
   const knownMyOrderIds = useRef(null);
@@ -177,6 +179,12 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // προσκήνιο, άρα ό,τι βρούμε «νέο» το έχει ήδη αναγγείλει το push.
   const suppressAlarmOnNextFetch = useRef(false);
   const alarmTimers = useRef([]);
+  // ΜΕΧΡΙ ΠΟΤΕ ο συναγερμός ανάθεσης είναι απαραβίαστος (αίτημα πελάτη 05/09):
+  // ό,τι κι αν φτάσει στα επόμενα δευτερόλεπτα — μήνυμα κέντρου, ακύρωση,
+  // ανακοίνωση συναδέλφου — ΔΕΝ του κόβει τον ήχο. Τα υπόλοιπα μπαίνουν στην
+  // ουρά και εμφανίζονται αφού πατηθεί το «ΟΚ». Μόνο ο ίδιος ο διανομέας (ΟΚ) ή
+  // η λήξη των 20" τον σταματούν.
+  const assignmentAlarmUntil = useRef(0);
   // Ποιες ήταν προγραμματισμένες στο τελευταίο fetch. Χρειάζεται ως ref (και όχι
   // state) γιατί το διαβάζει ο realtime handler, που ζει σε effect με άδειο
   // dependency array — ένα state θα ήταν παγωμένο στην αρχική τιμή του.
@@ -200,8 +208,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState({ title: '', message: '', onConfirm: null, alertOnly: false, confirmLabel: 'Ναι' });
 
-  // State για μηνύματα από το Κέντρο Ελέγχου
-  const [systemAlert, setSystemAlert] = useState(null);
+  // State για μηνύματα από το Κέντρο Ελέγχου — ΟΥΡΑ, ίδιος λόγος με τα υπόλοιπα:
+  // δύο μηνύματα στη σειρά και το δεύτερο έσβηνε το πρώτο πριν το δει κανείς.
+  const [systemAlerts, setSystemAlerts] = useState([]);
 
   // ── Ανακοινώσεις μεταξύ διανομέων (αίτημα πελάτη 08/08/2026) ───────────────
   // ΟΥΡΑ και όχι μία τιμή: αν δύο συνάδελφοι μιλήσουν σχεδόν ταυτόχρονα, η
@@ -353,6 +362,48 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       }]);
     };
 
+    // Μήνυμα κέντρου που ήρθε ως push. Το κείμενο ζει ΜΟΝΟ στο body της
+    // ειδοποίησης (το data κουβαλά σκέτο kind:'message'), οπότε από εκεί το
+    // διαβάζουμε.
+    const readAdminMessagePush = (notification) => {
+      const data = notification?.request?.content?.data;
+      if (!data || data.kind !== 'message') return;
+      enqueueSystemAlert(notification?.request?.content?.body);
+    };
+
+    // ─── ΟΣΑ ΠΕΡΙΜΕΝΟΥΝ ΣΤΗ ΜΠΑΡΑ ΕΙΔΟΠΟΙΗΣΕΩΝ ────────────────────────────────
+    // ΤΟ ΚΕΝΟ ΠΟΥ ΕΚΛΕΙΣΕ (αίτημα πελάτη 05/09): οι ανακοινώσεις συναδέλφων και τα
+    // μηνύματα κέντρου ταξιδεύουν ως broadcast — εφήμερα, δεν αποθηκεύονται
+    // πουθενά. Οι κάρτες τους έμπαιναν μόνο από δύο δρόμους που ΔΕΝ καλύπτουν τη
+    // συνηθισμένη περίπτωση:
+    //   • ο listener λήψης χτυπά μόνο με ΖΩΝΤΑΝΗ διεργασία (σκοτωμένη εφαρμογή = τίποτα),
+    //   • ο listener του tap χτυπά μόνο αν πατηθεί η ίδια η ειδοποίηση.
+    // Ο διανομέας που άνοιγε την εφαρμογή από το εικονίδιο έβλεπε την ειδοποίηση
+    // στη μπάρα αλλά ΚΑΜΙΑ κάρτα μέσα στην εφαρμογή — κι αν δεν την είχε ακούσει
+    // (οδηγεί, θόρυβος), δεν μάθαινε ποτέ τι έλεγε.
+    //
+    // Η μπάρα είναι η αποθήκη που δεν είχαμε: ό,τι δεν έχει σβήσει ο διανομέας
+    // είναι ακόμα εκεί και το διαβάζουμε. Το dedup των υπαρχόντων readers
+    // εγγυάται ότι δεν θα δείξουμε δύο φορές το ίδιο.
+    const syncFromNotificationTray = async () => {
+      try {
+        const presented = await Notifications.getPresentedNotificationsAsync();
+        for (const notification of presented) {
+          // `true` = ο ήχος έχει ήδη παιχτεί από το λειτουργικό όταν ήρθε.
+          // Μια σιωπηλή κάρτα είναι το ζητούμενο εδώ, όχι δεύτερος συναγερμός.
+          readDriverBroadcastPush(notification, true);
+          readCancelledOrderPush(notification);
+          readAdminMessagePush(notification);
+        }
+      } catch (e) {
+        console.log('Tray sync error:', e);
+      }
+    };
+
+    // Στο άνοιγμα της οθόνης — καλύπτει το «άνοιξα την εφαρμογή από το εικονίδιο
+    // μετά από σκοτωμένη διεργασία», που είναι και το συνηθισμένο.
+    syncFromNotificationTray();
+
     // Listeners για ανανέωση δεδομένων μέσω Push Notifications
     const notificationListener = Notifications.addNotificationReceivedListener(notification => {
       // Ο listener χτυπά και σε background (η εφαρμογή ζει ακόμα). ΤΟΤΕ όμως το
@@ -361,6 +412,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       rememberAssignmentPush(notification, AppState.currentState !== 'active');
       readDriverBroadcastPush(notification, AppState.currentState !== 'active');
       readCancelledOrderPush(notification);
+      readAdminMessagePush(notification);
       fetchOrders();
     });
 
@@ -369,6 +421,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       rememberAssignmentPush(response?.notification, true);
       readDriverBroadcastPush(response?.notification, true);
       readCancelledOrderPush(response?.notification);
+      readAdminMessagePush(response?.notification);
       fetchOrders();
     });
 
@@ -414,6 +467,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         // το FCM.
         suppressAlarmOnNextFetch.current = true;
         fetchOrders();
+        // Ό,τι έφτασε όσο λείπαμε κάθεται ακόμα στη μπάρα — από εκεί χτίζονται οι
+        // κάρτες που αλλιώς θα χάνονταν (βλ. syncFromNotificationTray).
+        syncFromNotificationTray();
         // Ίδιος λόγος: το realtime κανάλι GPS χάνει ό,τι συνέβη όσο ήμασταν
         // στο παρασκήνιο, οπότε ρωτάμε ΑΠΕΥΘΕΙΑΣ τη βάση για το πραγματικό
         // last_seen αντί να περιμένουμε το επόμενο φυσικό στίγμα.
@@ -433,7 +489,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         if (!data) return;
         const targets = Array.isArray(data.target_ids) ? data.target_ids : [data.target_id];
         if (data.target_type === 'driver' && (targets.includes('all') || targets.includes(currentUser.id))) {
-          setSystemAlert(data.message);
+          enqueueSystemAlert(data.message);
           // ΣΥΝΕΧΟΜΕΝΟΣ ήχος μέχρι το «Το είδα (ΟΚ)» (αίτημα πελάτη): το μήνυμα
           // του κέντρου δεν πρέπει να περνά απαρατήρητο πάνω στη μηχανή. Δικός
           // του ήχος (messagePlayer), ξεχωριστός από παραγγελία/ανάθεση.
@@ -604,6 +660,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   function stopAlarm() {
     clearAlarmTimers();
+    assignmentAlarmUntil.current = 0;
     Vibration.cancel();
     // Σταματάμε ΚΑΙ τους τρεις players (ό,τι κι αν έπαιζε) — δεν θέλουμε κάποιος
     // να μείνει να κάνει loop αν χτυπήσουν σχεδόν ταυτόχρονα δύο διαφορετικά events.
@@ -624,7 +681,27 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // επιλέγει ΠΟΙΟΝ ήχο θα παίξει (η ανάθεση έχει δικό της, ξεχωριστό από το μήνυμα
   // κέντρου / νέα παραγγελία).
   function startAlarm(autoStopMs, targetPlayer = player) {
+    const isAssignment = targetPlayer === alarmPlayer;
+    // Ο ΦΡΟΥΡΟΣ: όσο τρέχει ο συναγερμός ανάθεσης, κανένα άλλο συμβάν δεν παίρνει
+    // τον ήχο. Χωρίς αυτό, ένα μήνυμα κέντρου δευτερόλεπτα μετά την ανάθεση
+    // έκανε clearAlarmTimers + άλλαζε player, και η ανάθεση σώπαινε στη μέση.
+    if (!isAssignment && Date.now() < assignmentAlarmUntil.current) return;
+
     clearAlarmTimers();
+    // Νέα ανάθεση μέσα στο παράθυρο ΕΠΙΤΡΕΠΕΤΑΙ να το ανανεώσει: είναι κι αυτή
+    // ανάθεση, δεν την υποβαθμίζουμε.
+    if (isAssignment) {
+      assignmentAlarmUntil.current = Date.now() + (autoStopMs > 0 ? autoStopMs : ASSIGNMENT_ALARM_MS);
+    }
+
+    // ΕΝΑΣ ΗΧΟΣ ΤΗ ΦΟΡΑ. Το μήνυμα κέντρου παίζει σε loop μέχρι το «ΟΚ»: αν
+    // έφτανε ανάθεση από πάνω του, μέχρι τώρα έπαιζαν ΚΑΙ ΤΑ ΔΥΟ μαζί και δεν
+    // ξεχώριζε κανένα. Σωπαίνουμε ό,τι άλλο έπαιζε — η κάρτα του μένει στην ουρά
+    // και θα εμφανιστεί κανονικά μετά το «ΟΚ» της ανάθεσης.
+    [player, alarmPlayer, messagePlayer, colleaguePlayer].forEach((p) => {
+      if (!p || p === targetPlayer) return;
+      try { p.loop = false; p.pause(); } catch (e) { console.log('Audio Error:', e); }
+    });
     Vibration.vibrate([0, 600, 400], true); // επαναλαμβανόμενη δόνηση
     try {
       if (targetPlayer) {
@@ -648,6 +725,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
 
   // Απλή, μία φορά ειδοποίηση (χωρίς επανάληψη).
   function triggerNotification() {
+    // Βλ. assignmentAlarmUntil: ούτε ο ήχος νέας παραγγελίας δεν μπαίνει πάνω
+    // στον συναγερμό ανάθεσης — η παραγγελία θα φαίνεται ούτως ή άλλως στη λίστα.
+    if (Date.now() < assignmentAlarmUntil.current) return;
     Vibration.vibrate([0, 500, 200, 500]);
     try {
       if (player) {
@@ -670,6 +750,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   // ένα «πάω για βενζίνη» δεν είναι αυτό, και αν χτυπούσε έτσι θα σταματούσαν
   // όλοι οι διανομείς στον δρόμο για μια πληροφορία.
   function playColleagueChime() {
+    // Βλ. assignmentAlarmUntil: η ανακοίνωση συναδέλφου δεν διακόπτει ανάθεση.
+    // Η κάρτα της μπαίνει κανονικά στην ουρά και θα εμφανιστεί μετά το «ΟΚ».
+    if (Date.now() < assignmentAlarmUntil.current) return;
     Vibration.vibrate([0, 400, 200, 400]); // μία φορά — ΟΧΙ repeat
     try {
       if (colleaguePlayer) {
@@ -693,6 +776,22 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
    * Αυτό ακριβώς ήταν το διπλό χτύπημα που ανέφερε ο πελάτης στις αναθέσεις
    * (30/07/2026), γι' αυτό το κριτήριο δεν είναι μόνο το AppState.
    */
+  /**
+   * Μήνυμα κέντρου στην ουρά. Το dedup γίνεται στο ΚΕΙΜΕΝΟ: το ίδιο μήνυμα
+   * ταξιδεύει από δύο δρόμους (realtime broadcast με ανοιχτή εφαρμογή, FCM push
+   * που μένει στη μπάρα) και δεν υπάρχει id πουθενά για να τα δέσει. Όσο μια
+   * κάρτα είναι αδιάβαστη, δεύτερη με το ίδιο ακριβώς κείμενο είναι ο ίδιος ο
+   * εαυτός της· μετά το «ΟΚ» φεύγει από την ουρά και ένα νέο ίδιο μήνυμα
+   * εμφανίζεται κανονικά.
+   */
+  function enqueueSystemAlert(message) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    setSystemAlerts((queue) => (queue.some((a) => a.message === text)
+      ? queue
+      : [...queue, { id: `${Date.now()}-${queue.length}`, message: text }]));
+  }
+
   function receiveDriverBroadcast(raw, alreadySounded = false) {
     if (!raw || !raw.message) return;
     if (raw.sender_id && String(raw.sender_id) === String(currentUser.id)) return;
@@ -864,7 +963,10 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           assignedByPushIds.current.delete(String(o.id));
           pushAlreadySoundedIds.current.delete(String(o.id));
         });
-        setAssignmentAlert(fresh[0]);
+        setAssignmentAlerts((queue) => {
+          const have = new Set(queue.map((o) => String(o.id)));
+          return [...queue, ...fresh.filter((o) => !have.has(String(o.id)))];
+        });
         if (!announcedByOs) startAlarm(ASSIGNMENT_ALARM_MS, alarmPlayer);
       }
       knownMyOrderIds.current = new Set(mineMapped.map(o => o.id));
@@ -1524,6 +1626,20 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
 
+  // ── ΠΟΙΑ ΚΑΡΤΑ ΦΑΙΝΕΤΑΙ ΤΩΡΑ ────────────────────────────────────────────────
+  // Μέχρι σήμερα τα τέσσερα παράθυρα ήταν ανεξάρτητα και μπορούσαν να είναι
+  // ανοιχτά ΤΑΥΤΟΧΡΟΝΑ, στοιβαγμένα με σειρά που όριζε η τύχη της άφιξης.
+  // Τώρα δείχνουμε ΕΝΑ κάθε φορά, με σταθερή σειρά, και το «ΟΚ» φέρνει το επόμενο:
+  //   ανάθεση → μήνυμα κέντρου → ακύρωση παραγγελίας → ανακοίνωση συναδέλφου
+  // Η ανάθεση πρώτη ΠΑΝΤΑ, ανεξάρτητα από το τι ήρθε νωρίτερα (αίτημα πελάτη
+  // 05/09): είναι το μόνο που ζητά άμεση ενέργεια πάνω στη μηχανή.
+  const activeAlert =
+    assignmentAlerts.length > 0 ? 'assignment'
+    : systemAlerts.length > 0 ? 'system'
+    : cancelledOrderAlerts.length > 0 ? 'cancel'
+    : driverBroadcasts.length > 0 ? 'broadcast'
+    : null;
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { borderBottomWidth: 0, elevation: 5, shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity: 0.1, shadowRadius: 5, backgroundColor: theme.background, zIndex: 10 }]}>
@@ -1732,7 +1848,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       </Modal>
 
       {/* ─── MODAL ΕΙΔΟΠΟΙΗΣΗΣ ΚΕΝΤΡΟΥ ΕΛΕΓΧΟΥ ─── */}
-      <Modal visible={!!systemAlert} transparent animationType="fade">
+      <Modal visible={activeAlert === 'system'} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <View style={{
             width: '100%',
@@ -1753,7 +1869,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             </Text>
             <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
               <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14', lineHeight: 24 }}>
-                {systemAlert}
+                {systemAlerts[0]?.message}
               </Text>
             </View>
             <TouchableOpacity
@@ -1763,7 +1879,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
                 borderRadius: 12,
                 alignItems: 'center'
               }}
-              onPress={() => { stopAlarm(); setSystemAlert(null); }}
+              onPress={() => { stopAlarm(); setSystemAlerts((queue) => queue.slice(1)); }}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
             </TouchableOpacity>
@@ -1775,7 +1891,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           Χτυπά δυνατά και επαναλαμβανόμενα για 15" ώστε να μη χαθεί η ανάθεση.
           Σταματά είτε με το ΟΚ είτε μόλις περάσουν τα 15" — ο ήχος σταματά μόνος
           του, το παράθυρο όμως μένει μέχρι να το δει ο διανομέας. */}
-      <Modal visible={!!assignmentAlert} transparent animationType="fade">
+      <Modal visible={activeAlert === 'assignment'} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <View style={{
             width: '100%',
@@ -1792,15 +1908,15 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
             </Text>
             <View style={{ backgroundColor: isDarkMode ? theme.toggleBg : '#F4F0EB', padding: 16, borderRadius: 12, marginBottom: 20 }}>
               <Text style={{ fontSize: 16, fontWeight: '800', color: isDarkMode ? '#C5A066' : '#8A7347', marginBottom: 4 }}>
-                {assignmentAlert?.store_name}
+                {assignmentAlerts[0]?.store_name}
               </Text>
               <Text style={{ fontSize: 16, color: isDarkMode ? '#F0EBE2' : '#1E1A14' }}>
-                {assignmentAlert?.address}
+                {assignmentAlerts[0]?.address}
               </Text>
             </View>
             <TouchableOpacity
               style={{ backgroundColor: '#C5A066', paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
-              onPress={() => { stopAlarm(); setAssignmentAlert(null); setActiveTab('my_orders'); }}
+              onPress={() => { stopAlarm(); setAssignmentAlerts((queue) => queue.slice(1)); setActiveTab('my_orders'); }}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Το είδα (ΟΚ)</Text>
             </TouchableOpacity>
@@ -1813,7 +1929,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
           παράθυρο περιμένει ήσυχα το «ΟΚ» — μπορεί ο διανομέας να οδηγεί.
           Το ΟΝΟΜΑ και η ΩΡΑ είναι το κύριο περιεχόμενο (ρητό αίτημα πελάτη):
           χωρίς αυτά, «πάω για βενζίνη» δεν σημαίνει τίποτα. */}
-      <Modal visible={driverBroadcasts.length > 0} transparent animationType="fade">
+      <Modal visible={activeAlert === 'broadcast'} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <View style={{
             width: '100%',
@@ -1868,7 +1984,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       {/* ─── ΔΙΑΓΡΑΦΗ ΠΑΡΑΓΓΕΛΙΑΣ ΑΠΟ ΤΟ ΚΕΝΤΡΟ ───
           Ο ήχος και το banner τα έχει ήδη δώσει το push· εδώ μόνο το ίχνος μέσα
           στην εφαρμογή, ίδιο ΟΥΡΑ pattern με την ανακοίνωση συναδέλφου. */}
-      <Modal visible={cancelledOrderAlerts.length > 0} transparent animationType="fade">
+      <Modal visible={activeAlert === 'cancel'} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <View style={{
             width: '100%',
