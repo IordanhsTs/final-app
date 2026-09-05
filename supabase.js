@@ -35,12 +35,21 @@ const STORAGE_KEY = 'vertex-auth'; // κοινό session key και για τα 
 const ACTIVE_CACHE_KEY = 'vertex-active-backend';
 const TENANT_KEY = 'vertex-tenant'; // MULTI-TENANT: το schema της εταιρίας του χρήστη
 const CHECK_INTERVAL_MS = 30000;
-const FETCH_TIMEOUT_MS = 4000;
-const FAILURES_BEFORE_SWITCH = 2;
+// ΤΑ 4 ΔΕΥΤΕΡΟΛΕΠΤΑ ΗΤΑΝ ΛΙΓΑ (05/09/2026): στο κινητό του διανομέα, με το
+// ραδιόφωνο σε ύπνο ή σε αδύναμο σήμα, το πρώτο αίτημα μετά από αδράνεια αργεί
+// κανονικά 3-6 δευτ. Έτσι ένα υγιέστατο primary «έπεφτε» και η συσκευή γύριζε
+// μόνη της στο εφεδρικό — σιωπηλά, γράφοντας από κει και πέρα σε λάθος βάση.
+const CONFIG_TIMEOUT_MS = 8000;
+const HEALTH_TIMEOUT_MS = 6000;
+const FAILURES_BEFORE_SWITCH = 3;
+// Το Android παγώνει τα timers στο παρασκήνιο: δύο «συνεχόμενες» αποτυχίες
+// μπορεί να απέχουν ώρες. Ξεχνάμε ό,τι είναι παλιότερο από 5 λεπτά.
+const FAILURE_MEMORY_MS = 5 * 60 * 1000;
 
 let activeIndex = 0;
 let tenantSchema; // MULTI-TENANT: undefined → default schema 'public' (backward-compatible)
 let consecutiveFailures = 0;
+let lastFailureAt = 0;
 const listeners = new Set();
 const tokenListeners = new Set(); // ταΐζουν το native GPS service με φρέσκο token σε refresh
 let watchdogTimer = null;
@@ -163,9 +172,9 @@ AppState.addEventListener('change', (state) => {
   } catch (_) {}
 });
 
-function fetchWithTimeout(url, options = {}) {
+function fetchWithTimeout(url, options = {}, timeoutMs = HEALTH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { ...options, signal: controller.signal }).finally(() =>
     clearTimeout(timer)
   );
@@ -187,7 +196,7 @@ async function readRemoteConfig() {
   for (const base of CONFIG_URLS) {
     try {
       const sep = base.includes('?') ? '&' : '?';
-      const res = await fetchWithTimeout(`${base}${sep}t=${Date.now()}`);
+      const res = await fetchWithTimeout(`${base}${sep}t=${Date.now()}`, {}, CONFIG_TIMEOUT_MS);
       if (res.ok) {
         const cfg = await res.json();
         if (cfg && (cfg.active === 'primary' || cfg.active === 'standby')) {
@@ -228,22 +237,39 @@ async function tick() {
     return;
   }
 
-  // 2) Fallback αν δεν απαντά το config: τοπικός έλεγχος υγείας.
-  if (await isHealthy(BACKENDS[activeIndex])) {
+  // 2) Fallback αν δεν απαντά το config: ελέγχουμε ΚΑΙ ΤΑ ΔΥΟ backends ΤΑΥΤΟΧΡΟΝΑ.
+  //    Εδώ ήταν το λάθος: παλιότερα μετρούσαμε αποτυχίες του ενεργού backend σε
+  //    άλλη στιγμή από τον έλεγχο του άλλου. Ένα κινητό που ξυπνούσε με νεκρό
+  //    δίκτυο μάζευε 2 «αποτυχίες» και μετά — με το δίκτυο πια ζωντανό — έβρισκε
+  //    το εφεδρικό υγιές και γύριζε εκεί, χωρίς να έχει πέσει τίποτα.
+  const other = activeIndex === 0 ? 1 : 0;
+  const [activeOk, otherOk] = await Promise.all([
+    isHealthy(BACKENDS[activeIndex]),
+    BACKENDS[other] ? isHealthy(BACKENDS[other]) : Promise.resolve(false),
+  ]);
+
+  if (activeOk) {
     consecutiveFailures = 0;
     return;
   }
+  if (!otherOk) {           // έπεσαν και τα δύο → δικό μας δίκτυο, δεν αλλάζουμε τίποτα
+    consecutiveFailures = 0;
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastFailureAt > FAILURE_MEMORY_MS) consecutiveFailures = 0;
+  lastFailureAt = now;
   consecutiveFailures += 1;
+
   if (consecutiveFailures >= FAILURES_BEFORE_SWITCH) {
-    const other = activeIndex === 0 ? 1 : 0;
-    if (BACKENDS[other] && (await isHealthy(BACKENDS[other]))) {
-      await switchTo(other, 'το ενεργό backend δεν αποκρίνεται');
-    }
+    await switchTo(other, 'το ενεργό backend δεν αποκρίνεται');
   }
 }
 
 export function startFailoverWatchdog() {
   if (watchdogTimer || BACKENDS.length < 2) return;
+  tick();                   // ΑΜΕΣΩΣ, όχι σε 30 δευτ. — η αποθηκευμένη επιλογή μπορεί να είναι λάθος
   watchdogTimer = setInterval(tick, CHECK_INTERVAL_MS);
   // Το Android "παγώνει" τα setInterval όταν η εφαρμογή είναι στο παρασκήνιο.
   // Χωρίς αυτό, ένα κινητό που έμεινε σε standby μετά από failover ΔΕΝ γυρίζει
