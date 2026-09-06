@@ -1602,7 +1602,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
       // Στη θέση των χιλιομέτρων από 10/08/2026 (αίτημα πελάτη): τα χιλιόμετρα
       // βγαίνουν πλέον από το κοντέρ στο τέλος της βάρδιας, άρα δεν υπάρχει
       // ζωντανό νούμερο να δείξουμε εδώ.
-      { key: 'avg', icon: <Feather name="trending-up" size={17} color={theme.accent} />, label: 'Μέσος χρόνος', value: formatAvgDelivery(todayAvgSeconds) },
+      { key: 'avg', icon: <Feather name="trending-up" size={17} color={theme.accent} />, label: 'Μ.ό. διανομής', value: formatAvgDelivery(todayAvgSeconds) },
       { key: 'time', icon: <Feather name="clock" size={17} color={theme.accent} />, label: 'Ενεργός', value: formatShiftClock(todaySeconds) },
     ];
 
