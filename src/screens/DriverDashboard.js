@@ -96,12 +96,22 @@ export function averageDeliverySeconds(orders) {
   return total / valid.length / 1000;
 }
 
-/** «18′» για κάτω από μία ώρα, «1:05» από εκεί και πάνω. «—» χωρίς παραδόσεις. */
+/**
+ * «9.6′» για κάτω από μία ώρα, «1:05» από εκεί και πάνω. «—» χωρίς παραδόσεις.
+ *
+ * ΤΟ ΔΕΚΑΔΙΚΟ ΖΗΤΗΘΗΚΕ ΡΗΤΑ (πελάτης, 06/09/2026): ο ακέραιος έκρυβε τη διαφορά
+ * ανάμεσα σε 9,5 και 10,4 λεπτά και διαβαζόταν ως «λάθος νούμερο». Το 9.6
+ * σημαίνει 9 λεπτά και ~36 δευτερόλεπτα (0,6 × 60).
+ *
+ * Το κατώφλι είναι 59.95 και όχι 60: στα 59,97 λεπτά το toFixed(1) θα έγραφε
+ * «60.0′», δηλαδή μία ώρα σε μορφή λεπτών.
+ */
 function formatAvgDelivery(seconds) {
   if (seconds === null || seconds === undefined) return '—';
-  const mins = Math.round(seconds / 60);
-  if (mins < 60) return `${mins}′`;
-  return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`;
+  const mins = seconds / 60;
+  if (mins < 59.95) return `${mins.toFixed(1)}′`;
+  const whole = Math.round(mins);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
 /** «00:00» — ώρες:λεπτά στη βάρδια. Μεγαλώνει πέρα από τις 24 αν χρειαστεί. */
