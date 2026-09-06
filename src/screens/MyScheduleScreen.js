@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { supabase } from '../../supabase';
 import { Colors } from '../styles/globalStyles';
@@ -24,6 +24,12 @@ export default function MyScheduleScreen({ currentUser, isDarkMode, onBack }) {
   const [monday, setMonday] = useState(() => mondayOf(new Date()));
   const [rows, setRows] = useState([]);
   const [publishedAt, setPublishedAt] = useState(null);
+  // ── ΕΙΔΟΠΟΙΗΣΗ ΑΛΛΑΓΩΝ (migration 0032) ───────────────────────────────────
+  // Ο διαχειριστής μπορεί πλέον να αλλάξει δημοσιευμένη εβδομάδα. Όταν το κάνει,
+  // ο διανομέας πρέπει να το μάθει — μία φορά, και μόνο αυτός που δεν το έχει
+  // δει ακόμη. Το «έχει δει» ζει στη ΒΑΣΗ και όχι τοπικά: αλλιώς θα ξαναέβγαινε
+  // σε δεύτερη συσκευή ή μετά από επανεγκατάσταση.
+  const [hasChanges, setHasChanges] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   // Το «αν η τρέχουσα δεν έχει βγει, δείξε την επόμενη» επιτρέπεται ΜΙΑ φορά:
@@ -34,13 +40,17 @@ export default function MyScheduleScreen({ currentUser, isDarkMode, onBack }) {
     setLoading(true);
     try {
       const weekKey = ymd(monday);
-      const [schedule, week] = await Promise.all([
+      const [schedule, week, state] = await Promise.all([
         supabase.rpc('published_week_schedule', { p_week_start: weekKey }),
         supabase.from('schedule_weeks').select('published_at').eq('week_start', weekKey).maybeSingle(),
+        supabase.rpc('my_schedule_week_state', { p_week_start: weekKey }),
       ]);
 
       setRows(schedule.data || []);
       setPublishedAt(week.data?.published_at || null);
+      // Το RPC γυρίζει πίνακα με το πολύ μία γραμμή (καμία, αν η εβδομάδα δεν
+      // υπάρχει καν στο schedule_weeks).
+      setHasChanges(!!state.data?.[0]?.has_changes);
 
       // Ο διαχειριστής βγάζει το πρόγραμμα Σάββατο/Κυριακή για την ΕΠΟΜΕΝΗ
       // εβδομάδα. Όποιος ανοίξει την οθόνη τότε θα έβρισκε άδεια τρέχουσα
@@ -65,6 +75,24 @@ export default function MyScheduleScreen({ currentUser, isDarkMode, onBack }) {
   }, [monday]);
 
   useEffect(() => { load(); }, [load]);
+
+  // «Το είδα»: σημειώνεται στη βάση η έκδοση που διάβασε ο διανομέας, ώστε να
+  // μην ξαναβγεί η ειδοποίηση για ΤΗΝ ΙΔΙΑ αλλαγή — ξαναβγαίνει μόνο αν ο
+  // διαχειριστής δημοσιεύσει καινούργια.
+  //
+  // Σημειώνεται με ΤΟ ΠΑΤΗΜΑ και όχι με το άνοιγμα της οθόνης: μια ειδοποίηση
+  // που εξαφανίζεται μόνη της τη στιγμή που φορτώνει η σελίδα δεν έχει διαβαστεί
+  // από κανέναν. Η οθόνη μπορεί να ανοίξει και κατά λάθος.
+  const dismissChanges = useCallback(async () => {
+    setHasChanges(false);
+    try {
+      await supabase.rpc('mark_schedule_week_seen', { p_week_start: ymd(monday) });
+    } catch (e) {
+      // Αν αποτύχει, η ειδοποίηση θα ξαναβγεί την επόμενη φορά. Προτιμότερο από
+      // το να χαθεί σιωπηλά μια αλλαγή στο ωράριο κάποιου.
+      console.log('mark schedule seen error:', e);
+    }
+  }, [monday]);
 
   // ── Ομαδοποίηση ανά ημέρα ─────────────────────────────────────────────────
   const byDate = {};
@@ -188,6 +216,39 @@ export default function MyScheduleScreen({ currentUser, isDarkMode, onBack }) {
           onPrev={() => setMonday(addDays(monday, -7))}
           onNext={() => setMonday(addDays(monday, 7))}
         />
+
+        {/* ── Άλλαξε το πρόγραμμα (αίτημα πελάτη 06/09/2026) ──────────────
+            Κόκκινο και πάνω-πάνω: ο διανομέας έχει ήδη κανονίσει τη ζωή του
+            πάνω στην προηγούμενη έκδοση, οπότε αυτό δεν είναι πληροφορία που
+            αντέχει να περάσει απαρατήρητη. */}
+        {!loading && hasChanges ? (
+          <View style={{
+            marginHorizontal: 16, marginBottom: 14, padding: 14, borderRadius: 14,
+            backgroundColor: isDarkMode ? 'rgba(239,68,68,0.14)' : 'rgba(239,68,68,0.10)',
+            borderWidth: 1, borderColor: '#EF4444',
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Feather name="alert-triangle" size={17} color="#EF4444" />
+              <Text style={{ color: '#EF4444', fontWeight: '900', fontSize: 14.5, flexShrink: 1 }}>
+                Έγιναν αλλαγές στο πρόγραμμα
+              </Text>
+            </View>
+            <Text style={{ color: theme.text, fontSize: 13.5, lineHeight: 19 }}>
+              Η διαχείριση άλλαξε το πρόγραμμα αυτής της εβδομάδας. Δες το προσεκτικά — μπορεί να
+              άλλαξαν οι δικές σου βάρδιες.
+            </Text>
+            <TouchableOpacity
+              onPress={dismissChanges}
+              style={{
+                marginTop: 12, alignSelf: 'flex-start',
+                paddingVertical: 9, paddingHorizontal: 16, borderRadius: 10,
+                backgroundColor: '#EF4444',
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>Το είδα</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {loading ? (
           <ActivityIndicator size="large" color={theme.accent} style={{ marginTop: 40 }} />

@@ -43,6 +43,7 @@ export default function DriverMenu({
   visible, onClose, onNavigate, onLogout, onEndShift,
   isDarkMode, setIsDarkMode,
   driverName, isOnDuty, lastLocationUpdate, activeScreen, unreadAnnouncements,
+  scheduleChanged,
 }) {
   const theme = Colors[isDarkMode ? 'dark' : 'light'];
   const width = Math.min(300, Dimensions.get('window').width * 0.82);
@@ -178,6 +179,16 @@ export default function DriverMenu({
                     }}>
                       <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '900' }}>{unreadAnnouncements}</Text>
                     </View>
+                  ) : null}
+
+                  {/* Άλλαξε το πρόγραμμα μετά τη δημοσίευση (αίτημα πελάτη
+                      06/09/2026): «να κοκκινίζει μια ειδοποίηση στο πρόγραμμά
+                      μου». Κουκκίδα χωρίς αριθμό — το «πόσες αλλαγές» δεν λέει
+                      τίποτα στον διανομέα, μόνο το «κοίτα το ξανά». */}
+                  {item.key === 'schedule' && scheduleChanged ? (
+                    <View style={{
+                      width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444',
+                    }} />
                   ) : null}
                 </TouchableOpacity>
               );

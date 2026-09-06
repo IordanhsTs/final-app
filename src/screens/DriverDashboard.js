@@ -207,6 +207,9 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeScreen, setActiveScreen] = useState(null);
   const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+  // Κόκκινη κουκκίδα στο «Το πρόγραμμά μου» όταν ο διαχειριστής άλλαξε ήδη
+  // δημοσιευμένη εβδομάδα (migration 0032, αίτημα πελάτη 06/09/2026).
+  const [scheduleChanged, setScheduleChanged] = useState(false);
   // Λήξη βάρδιας με ένδειξη κοντέρ (10/08/2026). Ξεχωριστό από το `activeScreen`
   // επειδή δεν είναι «σελίδα του μενού» αλλά ροή με δύο αφετηρίες και δύο
   // καταλήξεις: 'menu' (σχολάει, μένει συνδεδεμένος) και 'logout' (και έξοδος).
@@ -894,6 +897,31 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
   }
 
   useEffect(() => { refreshAnnouncementBadge(); }, []);
+
+  // ── Κόκκινη κουκκίδα «άλλαξε το πρόγραμμα» ────────────────────────────────
+  // Ελέγχεται η ΤΡΕΧΟΥΣΑ εβδομάδα και η ΕΠΟΜΕΝΗ: ο διαχειριστής δημοσιεύει την
+  // επόμενη μέσα στο σαββατοκύριακο, οπότε μια αλλαγή σε αυτήν πρέπει να
+  // φαίνεται κι ας μην έχει ξεκινήσει ακόμη.
+  async function refreshScheduleBadge() {
+    try {
+      const monday = new Date();
+      monday.setHours(0, 0, 0, 0);
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const next = new Date(monday);
+      next.setDate(next.getDate() + 7);
+
+      const [a, b] = await Promise.all([
+        supabase.rpc('my_schedule_week_state', { p_week_start: key(monday) }),
+        supabase.rpc('my_schedule_week_state', { p_week_start: key(next) }),
+      ]);
+      setScheduleChanged(!!a.data?.[0]?.has_changes || !!b.data?.[0]?.has_changes);
+    } catch (e) {
+      console.log('Schedule badge error:', e);
+    }
+  }
+
+  useEffect(() => { refreshScheduleBadge(); }, []);
 
   async function fetchOrders() {
     setRefreshing(true);
@@ -1752,6 +1780,7 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         lastLocationUpdate={lastLocationUpdate}
         activeScreen={activeScreen}
         unreadAnnouncements={unreadAnnouncements}
+        scheduleChanged={scheduleChanged}
         // Η ΕΞΟΔΟΣ ΕΙΝΑΙ ΛΗΞΗ ΒΑΡΔΙΑΣ (αίτημα πελάτη 10/08/2026): περνά πρώτα από
         // τη φόρμα κοντέρ και μετά αποσυνδέει. Η φόρμα έχει δική της διέξοδο αν
         // δεν υπάρχει δίκτυο, ώστε η έξοδος να μη μπλοκάρει ποτέ.
@@ -1788,7 +1817,14 @@ export default function DriverDashboard({ currentUser, setCurrentUser, isDarkMod
         ) : activeScreen === 'availability' ? (
           <AvailabilityScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
         ) : activeScreen === 'schedule' ? (
-          <MyScheduleScreen currentUser={currentUser} isDarkMode={isDarkMode} onBack={() => setActiveScreen(null)} />
+          <MyScheduleScreen
+            currentUser={currentUser}
+            isDarkMode={isDarkMode}
+            // Στο κλείσιμο ξαναρωτάμε τη βάση: αν ο διανομέας πάτησε «Το είδα»,
+            // η κουκκίδα στο μενού πρέπει να σβήσει μαζί. Ίδιο μοτίβο με τις
+            // ανακοινώσεις.
+            onBack={() => { setActiveScreen(null); refreshScheduleBadge(); }}
+          />
         ) : activeScreen === 'announcements' ? (
           <AnnouncementsScreen
             currentUser={currentUser}
